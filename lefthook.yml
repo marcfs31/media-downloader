@@ -1,0 +1,57 @@
+# Real git-level hooks, powered by https://github.com/evilmartians/lefthook.
+# These fire for ANY commit — a manual `git commit`, a collaborator, a different
+# tool — unlike the Claude Code `Stop` hook (scripts/checkpoint.sh), which only runs
+# inside a Claude Code session. The two are complementary defense-in-depth, not
+# duplicates.
+#
+# This file does nothing until you opt in:
+#   brew install lefthook   (or: go install github.com/evilmartians/lefthook@latest)
+#   lefthook install
+#
+# Safe to commit even if lefthook is never installed on a given machine — it's inert
+# config until `lefthook install` symlinks the actual git hooks.
+pre-commit:
+  parallel: true
+  commands:
+    secrets:
+      run: >
+        if ! command -v gitleaks >/dev/null 2>&1; then
+          echo "gitleaks not installed — skipping git-level secret scan (see README)";
+        else
+          gitleaks protect --staged --no-banner --redact;
+        fi
+
+# Enforces the Conventional Commits type prefix (commitlint.config.mjs) — see
+# CLAUDE.md > GitHub conventions for the type vocabulary this expects.
+commit-msg:
+  commands:
+    conventional-commit:
+      run: >
+        if ! command -v npx >/dev/null 2>&1; then
+          echo "npx not found — skipping commitlint (Node not installed)";
+        elif [ ! -f commitlint.config.mjs ]; then
+          echo "commitlint.config.mjs not found — skipping commit-msg lint";
+        elif ! npx --no-install commitlint --version >/dev/null 2>&1; then
+          echo "commitlint not installed (pnpm add -D @commitlint/cli @commitlint/config-conventional) — skipping";
+        else
+          npx --no-install commitlint --edit {1};
+        fi
+
+# Runs the full correctness gate before code leaves this machine — the last line
+# of defense before a push, catching anything a per-commit checkpoint missed (a
+# fixup after the last commit, or a commit made outside Claude Code with no
+# Stop-hook gate at all). Escape hatch for a genuine emergency:
+#   SKIP_PRE_PUSH_GATE=1 git push
+# Don't reach for that as a habit — it exists for "prod is on fire," not "I'm
+# in a hurry."
+pre-push:
+  commands:
+    correctness-gate:
+      skip:
+        - run: test "$SKIP_PRE_PUSH_GATE" = "1"
+      run: >
+        if [ ! -x ./scripts/run-checks.sh ]; then
+          echo "scripts/run-checks.sh not found — skipping pre-push gate";
+        else
+          ./scripts/run-checks.sh;
+        fi

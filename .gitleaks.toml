@@ -1,0 +1,12 @@
+# Minimal gitleaks config — extends the tool's built-in default ruleset
+# (https://github.com/gitleaks/gitleaks) rather than redefining rules.
+#
+# If a real finding is a false positive specific to this repo (a fixture, a doc
+# example), add it here rather than disabling the scan:
+#
+# [[rules.allowlist]]
+#   regexes = ['''EXAMPLE_PLACEHOLDER_ONLY''']
+#   paths = ['''docs/examples/.*''']
+
+[extend]
+useDefault = true

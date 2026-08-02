@@ -1,0 +1,14 @@
+# Example semgrep config for LOCAL, custom rules. Rename to .semgrep.yml to
+# activate — run-checks.sh only runs semgrep if .semgrep.yml (or a .semgrep/ dir)
+# actually exists, so a fresh checkout never slows the gate down without being asked.
+#
+# Add your own rules under `rules:` (see https://semgrep.dev/docs/writing-rules/overview
+# for syntax) — this file is for rules specific to this repo.
+#
+# To ALSO pull a maintained registry pack (e.g. `p/ci` for general correctness +
+# security, or `p/security-audit` for a stricter security-only pass), don't put the
+# URL in this file — instead change the semgrep line in scripts/run-checks.sh to:
+#   semgrep --config .semgrep.yml --config p/ci --error --quiet
+# Registry packs need network access at scan time; local-only stays fully offline.
+rules: []
+

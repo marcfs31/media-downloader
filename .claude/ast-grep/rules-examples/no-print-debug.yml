@@ -1,0 +1,9 @@
+# Example ast-grep rule (Python). Copy into ../rules/ to activate.
+# Catches leftover debug print() calls; adjust/allowlist for CLI tools where
+# print() is the actual output mechanism, not debug scaffolding.
+id: no-print-debug
+language: Python
+severity: warning
+rule:
+  pattern: print($$$ARGS)
+message: "Leftover print() — remove it or switch to logging before committing."

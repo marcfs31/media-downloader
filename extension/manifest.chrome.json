@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "Media Downloader",
+  "version": "0.1.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAnlSAUEH3zpu/eqUg7QMJCOPDWSB7cZEib+vIKwppCEqnPy7qQFmIVRguvIYB8LNlklCCNxjG/OIVOSSSD4hHkabj5+suNJv+2XW9EK5CWi4Sd7Q1UdE0RNgl2PTTGT0232tso9xYQ0qAhnYZf3p+j8Gv5QKH0diolVrlub0KWwMaltjpOVwa7ekA5Djit2HFa7aNDefLgL/AePT+nY25dai5/SkcALH+qEBVQ+V2w/ivfXmuzMQa5xKhAkPgpGF+KSdSWqILBNiU5L3XRJWhE3myHC6NJSUJTaxXSI65htMXFoXwG+/wIUZN4+hzaYb8w8JWaVIZVsilwPT/pche2wIDAQAB",
+  "description": "Adds a download control to media on the current page, and can fetch a pasted link via the media-downloader native host.",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "permissions": ["downloads", "storage", "nativeMessaging", "scripting"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "all_frames": true,
+      "js": ["content.js"],
+      "css": ["styles.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png"
+    }
+  }
+}

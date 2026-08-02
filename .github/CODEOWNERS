@@ -1,0 +1,18 @@
+# Requires branch protection ("Require review from Code Owners") to actually
+# enforce review — this file alone doesn't block a merge, GitHub's branch
+# protection settings do. See:
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+#
+# Replace the placeholder below with real GitHub usernames/teams before relying
+# on this. Last pattern to match a changed file wins, so put broad defaults
+# first and more specific overrides (subdirectories, particular file types)
+# below them.
+
+# Default owner for everything not matched more specifically below.
+* @REPLACE_WITH_OWNER
+
+# Example of a narrower override — uncomment and adjust once real ownership
+# boundaries exist:
+# /apps/server/ @REPLACE_WITH_BACKEND_TEAM
+# /apps/web/ @REPLACE_WITH_FRONTEND_TEAM
+# /.github/ @REPLACE_WITH_OWNER

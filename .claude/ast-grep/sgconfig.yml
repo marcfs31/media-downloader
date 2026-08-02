@@ -1,0 +1,9 @@
+# Config for https://github.com/ast-grep/ast-grep — a tree-sitter based structural
+# search/lint tool, much stronger than regex for catching real patterns across many
+# languages at once. Points at ./rules, which starts EMPTY on purpose: run-checks.sh
+# only invokes `ast-grep scan` if there's at least one active rule, so a fresh
+# checkout never fails a gate on rules nobody asked for.
+#
+# To activate a starter rule: copy it from rules-examples/ into rules/.
+ruleDirs:
+  - rules

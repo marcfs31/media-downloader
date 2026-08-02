@@ -1,0 +1,23 @@
+# Claude Code template — generated/local artifacts, not source of truth
+.claude/stack-cache.json
+.claude/code-graph/graph.json
+
+# Common language build/dependency dirs (safe defaults; trim per-project as needed)
+node_modules/
+dist/
+build/
+.venv/
+venv/
+__pycache__/
+*.pyc
+target/
+.gradle/
+.DS_Store
+
+# Secrets — never commit these
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials*.json

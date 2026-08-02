@@ -1,0 +1,8 @@
+# Example ast-grep rule (JS/TS). Copy into ../rules/ to activate.
+# Catches leftover debug console.log calls without touching console.warn/error.
+id: no-console-log
+language: TypeScript
+severity: warning
+rule:
+  pattern: console.log($$$ARGS)
+message: "Leftover console.log — remove it or switch to a real logger before committing."

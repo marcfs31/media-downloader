@@ -1,0 +1,124 @@
+/* Namespaced with mdlx- to avoid colliding with host-page styles, since
+   content.ts injects this into every page the extension runs on. */
+
+.mdlx-download-btn {
+  position: fixed;
+  z-index: 2147483647;
+  width: 28px;
+  height: 28px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 6px;
+  background: rgba(20, 20, 20, 0.75);
+  color: #fff;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+.mdlx-download-btn:hover {
+  background: rgba(20, 20, 20, 0.92);
+}
+
+.mdlx-download-btn:disabled {
+  cursor: default;
+  opacity: 0.8;
+}
+
+/* --- popup ---------------------------------------------------------- */
+
+.mdlx-popup {
+  width: 320px;
+  padding: 12px 14px;
+  font:
+    13px/1.4 system-ui,
+    sans-serif;
+}
+
+.mdlx-popup h1 {
+  font-size: 15px;
+  margin: 0 0 10px;
+}
+
+.mdlx-popup h2 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #666;
+  margin: 0 0 6px;
+}
+
+.mdlx-section {
+  margin-bottom: 14px;
+}
+
+.mdlx-row {
+  display: flex;
+  gap: 6px;
+}
+
+.mdlx-row input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 7px;
+}
+
+.mdlx-row button {
+  padding: 5px 10px;
+  cursor: pointer;
+}
+
+.mdlx-status {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: #333;
+}
+
+.mdlx-status.mdlx-status-error {
+  color: #b3261e;
+}
+
+.mdlx-media-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.mdlx-media-list li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  border-bottom: 1px solid #eee;
+}
+
+.mdlx-media-list .mdlx-empty {
+  color: #888;
+  border-bottom: none;
+}
+
+.mdlx-media-list .mdlx-kind {
+  font-size: 10px;
+  text-transform: uppercase;
+  color: #888;
+  width: 34px;
+  flex: none;
+}
+
+.mdlx-media-list .mdlx-url {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mdlx-media-list button {
+  flex: none;
+  cursor: pointer;
+}

@@ -1,0 +1,18 @@
+{
+  "name": "claude-code-template",
+  // "universal" bundles Node, Python, Go, Java, Ruby, Rust, .NET, and Homebrew —
+  // deliberately broad because this template doesn't assume a stack until
+  // detect-stack.sh runs against real project files. Once a project's stack is
+  // fixed, swap this for that ecosystem's own devcontainer image (smaller,
+  // faster builds) — see https://github.com/devcontainers/images for options.
+  "image": "mcr.microsoft.com/devcontainers/universal:2",
+  "features": {
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+  "customizations": {
+    "vscode": {
+      "extensions": ["dbaeumer.vscode-eslint", "esbenp.prettier-vscode", "eamodio.gitlens"]
+    }
+  }
+}
