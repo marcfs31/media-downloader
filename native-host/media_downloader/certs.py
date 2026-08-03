@@ -24,7 +24,21 @@ from cryptography.x509.oid import NameOID
 DEFAULT_CERT_DIR = Path.home() / ".config" / "media-downloader"
 CERT_PATH = DEFAULT_CERT_DIR / "server-cert.pem"
 KEY_PATH = DEFAULT_CERT_DIR / "server-key.pem"
-VALID_DAYS = 3650
+# Safari (and Chrome) reject TLS certificates valid for longer than ~398 days
+# outright — "certificate has too long a validity period" — even self-signed
+# ones the user manually trusts. This isn't a CA policy we're opting into;
+# it's enforced client-side. Stay comfortably under it.
+VALID_DAYS = 395
+RENEW_WITHIN_DAYS = 7
+
+
+def _is_still_good(cert_path: Path, now: datetime.datetime) -> bool:
+    try:
+        cert = x509.load_pem_x509_certificate(cert_path.read_bytes())
+    except (OSError, ValueError):
+        return False
+    expires = cert.not_valid_after_utc
+    return (expires - now) > datetime.timedelta(days=RENEW_WITHIN_DAYS)
 
 
 def get_or_create_cert(
@@ -33,10 +47,13 @@ def get_or_create_cert(
     extra_hosts: tuple[str, ...] = (),
 ) -> tuple[Path, Path]:
     """Returns (cert_path, key_path), generating a self-signed cert on first
-    use. extra_hosts (the LAN IP, the mDNS hostname) go into the cert's
-    Subject Alternative Names so a phone connecting by either doesn't also
-    get a hostname-mismatch warning on top of the expected untrusted-issuer one."""
-    if cert_path.is_file() and key_path.is_file():
+    use — and regenerating it once the existing one is expired or close to
+    it, rather than silently serving a cert that's about to start failing.
+    extra_hosts (the LAN IP, the mDNS hostname) go into the cert's Subject
+    Alternative Names so a phone connecting by either doesn't also get a
+    hostname-mismatch warning on top of the expected untrusted-issuer one."""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    if cert_path.is_file() and key_path.is_file() and _is_still_good(cert_path, now):
         return cert_path, key_path
 
     cert_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -56,7 +73,6 @@ def get_or_create_cert(
         except ValueError:
             san_names.append(x509.DNSName(host))
 
-    now = datetime.datetime.now(datetime.timezone.utc)
     cert = (
         x509.CertificateBuilder()
         .subject_name(subject)
