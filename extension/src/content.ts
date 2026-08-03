@@ -93,18 +93,24 @@ button.addEventListener("mouseleave", scheduleHide);
 
 button.addEventListener("click", async () => {
   if (!currentAnchor) return;
-  // Re-run detection fresh rather than reusing whatever was resolved back
-  // at mouseover time — see currentAnchor's comment for why that matters.
-  const mediaEl = findMediaElement(currentAnchor);
-  const resolved = mediaEl ? resolveMediaUrl(mediaEl, location.href) : null;
-  if (!resolved) {
-    button.textContent = "✗";
-    setTimeout(() => (button.textContent = "⬇"), 1200);
-    return;
-  }
+  // Everything below — including re-resolving the anchor — runs inside the
+  // try/finally so the button always ends up showing ✓/✗ and re-enabling
+  // itself. Previously the re-resolution ran *before* this block, so a throw
+  // there (e.g. the background worker having reloaded out from under an
+  // already-open tab's content script — "Extension context invalidated")
+  // left the button stuck with no feedback at all, which looked exactly like
+  // the click doing nothing.
   button.disabled = true;
   button.textContent = "…";
   try {
+    // Re-run detection fresh rather than reusing whatever was resolved back
+    // at mouseover time — see currentAnchor's comment for why that matters.
+    const mediaEl = findMediaElement(currentAnchor);
+    const resolved = mediaEl ? resolveMediaUrl(mediaEl, location.href) : null;
+    if (!resolved) {
+      button.textContent = "✗";
+      return;
+    }
     await downloadResolved(resolved);
     button.textContent = "✓";
   } catch (err) {
