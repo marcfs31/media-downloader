@@ -12,7 +12,14 @@ import type { BackgroundResponse, ContentRequest, ContentResponse, MediaKind } f
 
 const HIDE_DELAY_MS = 250;
 
-let currentTarget: { kind: MediaKind; url: string; sourceType?: string } | null = null;
+// The raw element last hovered — re-resolved fresh at click time (see the
+// button's click handler) rather than trusting a snapshot taken at hover
+// time. Many players show a static poster/preview image (often .webp) on
+// hover and only mount the real <video> once playback actually starts
+// (autoplay-on-hover previews, click-to-play); resolving once at hover and
+// reusing that snapshot meant clicking after the swap still downloaded the
+// stale poster instead of the video that's now actually there.
+let currentAnchor: Element | null = null;
 let hideTimer: ReturnType<typeof setTimeout> | null = null;
 
 const button = document.createElement("button");
@@ -39,7 +46,7 @@ function scheduleHide() {
   if (hideTimer) clearTimeout(hideTimer);
   hideTimer = setTimeout(() => {
     button.style.display = "none";
-    currentTarget = null;
+    currentAnchor = null;
   }, HIDE_DELAY_MS);
 }
 
@@ -64,7 +71,7 @@ document.addEventListener(
     const resolved = resolveMediaUrl(mediaEl, location.href);
     if (!resolved) return;
     cancelHide();
-    currentTarget = { kind: resolved.kind, url: resolved.url, sourceType: resolved.sourceType };
+    currentAnchor = target;
     attachButton();
     positionButtonOver(mediaEl);
   },
@@ -85,11 +92,20 @@ button.addEventListener("mouseenter", cancelHide);
 button.addEventListener("mouseleave", scheduleHide);
 
 button.addEventListener("click", async () => {
-  if (!currentTarget) return;
+  if (!currentAnchor) return;
+  // Re-run detection fresh rather than reusing whatever was resolved back
+  // at mouseover time — see currentAnchor's comment for why that matters.
+  const mediaEl = findMediaElement(currentAnchor);
+  const resolved = mediaEl ? resolveMediaUrl(mediaEl, location.href) : null;
+  if (!resolved) {
+    button.textContent = "✗";
+    setTimeout(() => (button.textContent = "⬇"), 1200);
+    return;
+  }
   button.disabled = true;
   button.textContent = "…";
   try {
-    await downloadResolved(currentTarget);
+    await downloadResolved(resolved);
     button.textContent = "✓";
   } catch (err) {
     console.error("Media Downloader: download failed", err);

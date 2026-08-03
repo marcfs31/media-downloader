@@ -93,6 +93,40 @@ describe("findMediaElement / resolveMediaUrl", () => {
     );
   });
 
+  it("re-resolving the same anchor finds a <video> lazily inserted after the initial hover", () => {
+    // The exact reported bug: many players show a static poster (often
+    // .webp) on hover and only mount the real <video> once playback starts
+    // (autoplay-on-hover previews, click-to-play). Resolving once at hover
+    // time and reusing that snapshot meant clicking after the video
+    // appeared still downloaded the stale poster. content.ts's fix is to
+    // re-run findMediaElement/resolveMediaUrl on the same anchor at click
+    // time — this pins that re-resolution actually picks up the new video.
+    document.body.innerHTML = `
+      <div class="player">
+        <img id="poster" src="preview-frame.webp" class="poster">
+      </div>`;
+    const poster = document.getElementById("poster")!;
+
+    const beforePlay = findMediaElement(poster);
+    expect(beforePlay).toBe(poster);
+    expect(resolveMediaUrl(beforePlay!, "https://example.com")).toMatchObject({
+      kind: "image",
+      url: "https://example.com/preview-frame.webp",
+    });
+
+    // Playback starts; the site mounts the real <video> into the same player.
+    document
+      .querySelector(".player")!
+      .insertAdjacentHTML("beforeend", `<video src="https://example.com/clip.mp4"></video>`);
+
+    const afterPlay = findMediaElement(poster);
+    expect(afterPlay?.tagName).toBe("VIDEO");
+    expect(resolveMediaUrl(afterPlay!, "https://example.com")).toMatchObject({
+      kind: "video",
+      url: "https://example.com/clip.mp4",
+    });
+  });
+
   it("returns null when nothing resolvable is nearby", () => {
     document.body.innerHTML = `<div><span id="leaf">plain text</span></div>`;
     const leaf = document.getElementById("leaf")!;
