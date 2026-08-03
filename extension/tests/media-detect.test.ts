@@ -1,8 +1,10 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import {
+  chooseDownloadRequest,
   extensionForMime,
   filenameFromUrl,
   findMediaElement,
+  looksCodecIncompatible,
   resolveMediaUrl,
   scanDocumentForMedia,
 } from "../src/media-detect";
@@ -59,6 +61,38 @@ describe("findMediaElement / resolveMediaUrl", () => {
     });
   });
 
+  it("prefers a sibling <video> over an SVG-icon control button's own background-image", () => {
+    // The exact shape of custom player skins: video and its overlay controls
+    // are siblings under a shared player container, not ancestor/descendant.
+    document.body.innerHTML = `
+      <div class="player">
+        <video src="https://example.com/clip.mp4"></video>
+        <div class="controls">
+          <button id="play-btn" style="background-image: url('icon-play.svg')"></button>
+        </div>
+      </div>`;
+    const button = document.getElementById("play-btn")!;
+    const found = findMediaElement(button);
+    expect(found?.tagName).toBe("VIDEO");
+    expect(resolveMediaUrl(found!, "https://example.com")?.url).toBe(
+      "https://example.com/clip.mp4",
+    );
+  });
+
+  it("prefers a sibling <video> over a poster <img> placeholder", () => {
+    document.body.innerHTML = `
+      <div class="player">
+        <img id="poster" src="poster-placeholder.svg" class="poster">
+        <video src="https://example.com/clip.mp4"></video>
+      </div>`;
+    const poster = document.getElementById("poster")!;
+    const found = findMediaElement(poster);
+    expect(found?.tagName).toBe("VIDEO");
+    expect(resolveMediaUrl(found!, "https://example.com")?.url).toBe(
+      "https://example.com/clip.mp4",
+    );
+  });
+
   it("returns null when nothing resolvable is nearby", () => {
     document.body.innerHTML = `<div><span id="leaf">plain text</span></div>`;
     const leaf = document.getElementById("leaf")!;
@@ -69,6 +103,44 @@ describe("findMediaElement / resolveMediaUrl", () => {
     document.body.innerHTML = `<img src="/a.jpg" />`;
     const img = document.querySelector("img")! as HTMLImageElement;
     expect(resolveMediaUrl(img, "https://example.com")?.url).toBe("https://example.com/a.jpg");
+  });
+
+  it("collects <source> type attributes onto the resolved result", () => {
+    document.body.innerHTML = `
+      <video>
+        <source src="/clip.mp4" type='video/mp4; codecs="av01.0.05M.08"'>
+      </video>`;
+    const video = document.querySelector("video")!;
+    const resolved = resolveMediaUrl(video, "https://example.com");
+    expect(resolved?.sourceType).toContain("av01");
+  });
+});
+
+describe("looksCodecIncompatible", () => {
+  it("flags common poorly-supported-in-desktop-players codec tokens in the URL", () => {
+    expect(looksCodecIncompatible("https://cdn.test/videos/clip-av1.mp4")).toBe(true);
+    expect(looksCodecIncompatible("https://cdn.test/renditions/av01/seg1.mp4")).toBe(true);
+    expect(looksCodecIncompatible("https://cdn.test/vp9/clip.webm")).toBe(true);
+    expect(looksCodecIncompatible("https://cdn.test/vp09_clip.webm")).toBe(true);
+  });
+
+  it("flags a codec named in the <source> type even if the URL doesn't say so", () => {
+    expect(
+      looksCodecIncompatible(
+        "https://cdn.test/opaque-id-123.mp4",
+        'video/mp4; codecs="av01.0.05M.08"',
+      ),
+    ).toBe(true);
+  });
+
+  it("does not false-positive on unrelated substrings", () => {
+    expect(looksCodecIncompatible("https://cdn.test/davis1/clip.mp4")).toBe(false);
+    expect(looksCodecIncompatible("https://cdn.test/clip.mp4")).toBe(false);
+    expect(looksCodecIncompatible("https://cdn.test/clip.mp4", "video/mp4")).toBe(false);
+  });
+
+  it("is case-insensitive", () => {
+    expect(looksCodecIncompatible("https://cdn.test/CLIP-AV1.mp4")).toBe(true);
   });
 });
 
@@ -112,5 +184,58 @@ describe("scanDocumentForMedia", () => {
   it("returns an empty list for a page with no media", () => {
     document.body.innerHTML = `<p>Just text.</p>`;
     expect(scanDocumentForMedia(document, "https://example.com")).toEqual([]);
+  });
+});
+
+describe("chooseDownloadRequest", () => {
+  it("downloads a plain progressive video directly", () => {
+    const request = chooseDownloadRequest({
+      kind: "video",
+      url: "https://cdn.test/clip.mp4",
+      pageUrl: "https://example.com/page",
+    });
+    expect(request).toEqual({
+      type: "DOWNLOAD_URL",
+      url: "https://cdn.test/clip.mp4",
+      filename: "clip.mp4",
+      pageUrl: "https://example.com/page",
+    });
+  });
+
+  it("reroutes a blob: video through the page URL", () => {
+    const request = chooseDownloadRequest({
+      kind: "video",
+      url: "blob:https://example.com/abc-123",
+      pageUrl: "https://example.com/page",
+    });
+    expect(request).toEqual({ type: "DOWNLOAD_VIA_LINK", url: "https://example.com/page" });
+  });
+
+  it("reroutes an AV1/VP9 video through the page URL", () => {
+    const request = chooseDownloadRequest({
+      kind: "video",
+      url: "https://cdn.test/clip-av1.mp4",
+      pageUrl: "https://example.com/page",
+    });
+    expect(request).toEqual({ type: "DOWNLOAD_VIA_LINK", url: "https://example.com/page" });
+  });
+
+  it("does not reroute a blob: image (no MSE/codec concerns for images)", () => {
+    const request = chooseDownloadRequest({
+      kind: "image",
+      url: "blob:https://example.com/abc-123",
+      pageUrl: "https://example.com/page",
+    });
+    expect(request.type).toBe("DOWNLOAD_URL");
+  });
+
+  it("checks sourceType too, not just the URL", () => {
+    const request = chooseDownloadRequest({
+      kind: "video",
+      url: "https://cdn.test/opaque-id",
+      pageUrl: "https://example.com/page",
+      sourceType: 'video/mp4; codecs="av01.0.05M.08"',
+    });
+    expect(request).toEqual({ type: "DOWNLOAD_VIA_LINK", url: "https://example.com/page" });
   });
 });

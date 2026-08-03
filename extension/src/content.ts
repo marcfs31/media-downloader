@@ -5,20 +5,14 @@ import browser from "webextension-polyfill";
 import {
   findMediaElement,
   resolveMediaUrl,
-  filenameFromUrl,
+  chooseDownloadRequest,
   scanDocumentForMedia,
 } from "./media-detect";
-import type {
-  BackgroundRequest,
-  BackgroundResponse,
-  ContentRequest,
-  ContentResponse,
-  MediaKind,
-} from "./shared";
+import type { BackgroundResponse, ContentRequest, ContentResponse, MediaKind } from "./shared";
 
 const HIDE_DELAY_MS = 250;
 
-let currentTarget: { kind: MediaKind; url: string } | null = null;
+let currentTarget: { kind: MediaKind; url: string; sourceType?: string } | null = null;
 let hideTimer: ReturnType<typeof setTimeout> | null = null;
 
 const button = document.createElement("button");
@@ -70,7 +64,7 @@ document.addEventListener(
     const resolved = resolveMediaUrl(mediaEl, location.href);
     if (!resolved) return;
     cancelHide();
-    currentTarget = { kind: resolved.kind, url: resolved.url };
+    currentTarget = { kind: resolved.kind, url: resolved.url, sourceType: resolved.sourceType };
     attachButton();
     positionButtonOver(mediaEl);
   },
@@ -108,35 +102,21 @@ button.addEventListener("click", async () => {
   }
 });
 
-async function downloadResolved(target: { kind: MediaKind; url: string }): Promise<void> {
-  let url = target.url;
-  if (url.startsWith("blob:")) {
-    url = await blobUrlToDataUrl(url);
-  }
-  // Once a blob: URL is converted to a data: URL its path is meaningless, so
-  // derive the filename from whichever URL still carries useful info.
-  const filename = filenameFromUrl(target.url.startsWith("blob:") ? url : target.url, target.kind);
-  const request: BackgroundRequest = {
-    type: "DOWNLOAD_URL",
-    url,
-    filename,
+async function downloadResolved(target: {
+  kind: MediaKind;
+  url: string;
+  sourceType?: string;
+}): Promise<void> {
+  const request = chooseDownloadRequest({
+    kind: target.kind,
+    url: target.url,
     pageUrl: location.href,
-  };
+    sourceType: target.sourceType,
+  });
   const response = (await browser.runtime.sendMessage(request)) as BackgroundResponse;
   if (response?.type === "DOWNLOAD_ERROR") {
     throw new Error(response.message);
   }
-}
-
-async function blobUrlToDataUrl(blobUrl: string): Promise<string> {
-  const res = await fetch(blobUrl);
-  const blob = await res.blob();
-  return await new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = () => reject(reader.error ?? new Error("Failed to read blob"));
-    reader.readAsDataURL(blob);
-  });
 }
 
 browser.runtime.onMessage.addListener((raw: unknown): ContentResponse | undefined => {
@@ -146,3 +126,15 @@ browser.runtime.onMessage.addListener((raw: unknown): ContentResponse | undefine
   }
   return undefined;
 });
+
+// Toolbar badge count: one scan at load, top frame only (so frames don't
+// fight over the same badge). Not live-updated for content a page adds
+// later — see background.ts's updateBadge for why that's an intentional
+// simplification, not an oversight.
+if (window.top === window.self) {
+  const count = scanDocumentForMedia(document, location.href).length;
+  browser.runtime.sendMessage({ type: "REPORT_MEDIA_COUNT", count }).catch(() => {
+    // Background worker not ready yet, or this is a page the extension
+    // can't message (rare) — the badge just stays blank, not worth retrying.
+  });
+}

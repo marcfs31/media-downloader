@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 from typing import Any, BinaryIO
 
-from .downloader import DownloadError, Progress, download
+from .downloader import DownloadError, DownloadOptions, Progress, download
 
 DEFAULT_DEST = Path.home() / "Downloads" / "MediaDownloader"
 
@@ -74,8 +74,18 @@ def handle_download(request: dict[str, Any], out: BinaryIO) -> None:
             },
         )
 
+    options = DownloadOptions(
+        audio_only=bool(request.get("audio")),
+        encrypt=bool(request.get("encrypt")),
+        quality=request.get("quality") or None,
+        video_format=str(request.get("video_format") or "mp4"),
+        audio_format=str(request.get("audio_format") or "m4a"),
+        image_format=request.get("image_format") or None,
+        download_all=bool(request.get("download_all")),
+        strip_metadata=bool(request.get("strip_metadata")),
+    )
     try:
-        path = download(url, DEFAULT_DEST, on_progress)
+        path = download(url, DEFAULT_DEST, on_progress, options)
         write_message(out, {"id": request_id, "type": "done", "path": str(path)})
     except DownloadError as exc:
         write_message(out, {"id": request_id, "type": "error", "message": str(exc)})

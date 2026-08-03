@@ -10,3 +10,13 @@
 
 [extend]
 useDefault = true
+
+# The Chromium manifest's "key" field is the extension's PUBLIC key (base64
+# SPKI) — committed on purpose to pin the extension ID so the native
+# messaging host can be registered against a stable ID. It's distributed to
+# every browser that installs the extension; there is nothing secret in it.
+[allowlist]
+paths = [
+  '''extension/manifest\.chrome\.json''',
+  '''extension/dist/.*/manifest\.json''',
+]

@@ -9,7 +9,7 @@
     "48": "icons/icon-48.png",
     "128": "icons/icon-128.png"
   },
-  "permissions": ["downloads", "storage", "nativeMessaging", "scripting"],
+  "permissions": ["downloads", "storage", "nativeMessaging", "scripting", "contextMenus"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "scripts": ["background.js"],
@@ -35,6 +35,9 @@
     "gecko": {
       "id": "media-downloader@claude-template.local",
       "strict_min_version": "115.0"
+    },
+    "gecko_android": {
+      "strict_min_version": "120.0"
     }
   }
 }

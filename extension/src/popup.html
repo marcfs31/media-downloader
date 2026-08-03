@@ -16,6 +16,55 @@
           <button id="mdlx-url-submit" type="button">Download</button>
         </div>
         <p id="mdlx-status" class="mdlx-status" hidden></p>
+
+        <details class="mdlx-options">
+          <summary>Download options</summary>
+          <label class="mdlx-checkbox-row">
+            <input type="checkbox" id="mdlx-audio-only" />
+            Audio only
+          </label>
+          <label class="mdlx-checkbox-row">
+            <input type="checkbox" id="mdlx-encrypt" />
+            Encrypt at rest
+          </label>
+          <label class="mdlx-checkbox-row">
+            <input type="checkbox" id="mdlx-strip-metadata" />
+            Strip metadata
+          </label>
+          <label class="mdlx-select-row" id="mdlx-quality-row">
+            Quality
+            <select id="mdlx-quality">
+              <option value="">Best</option>
+              <option value="2160p">2160p</option>
+              <option value="1080p">1080p</option>
+              <option value="720p">720p</option>
+              <option value="480p">480p</option>
+              <option value="360p">360p</option>
+            </select>
+          </label>
+          <label class="mdlx-select-row" id="mdlx-video-format-row">
+            Video format
+            <select id="mdlx-video-format">
+              <option value="mp4">mp4</option>
+              <option value="mkv">mkv</option>
+            </select>
+          </label>
+          <label class="mdlx-select-row" id="mdlx-audio-format-row" hidden>
+            Audio format
+            <select id="mdlx-audio-format">
+              <option value="m4a">m4a</option>
+              <option value="mp3">mp3</option>
+              <option value="opus">opus</option>
+              <option value="wav">wav</option>
+            </select>
+          </label>
+          <p class="mdlx-hint">
+            Applies to pasted links and to hover-button downloads that need the native
+            host/companion server (AV1/VP9, blob-sourced video). Plain direct file downloads use the
+            browser's own downloads API and can't be encrypted, stripped, or transcoded by this
+            extension.
+          </p>
+        </details>
       </section>
 
       <section class="mdlx-section">
@@ -23,6 +72,16 @@
         <ul id="mdlx-media-list" class="mdlx-media-list">
           <li class="mdlx-empty">Scanning…</li>
         </ul>
+      </section>
+
+      <section class="mdlx-section">
+        <h2>Companion server (for phones / no native host)</h2>
+        <div class="mdlx-row">
+          <input id="mdlx-companion-input" type="url" placeholder="http://192.168.1.20:8765/?t=…" />
+          <button id="mdlx-companion-save" type="button">Save</button>
+        </div>
+        <p id="mdlx-companion-status" class="mdlx-status" hidden></p>
+        <p id="mdlx-native-host-status" class="mdlx-status">Native host: checking…</p>
       </section>
     </main>
     <script src="popup.js"></script>

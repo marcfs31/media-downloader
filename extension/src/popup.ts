@@ -1,5 +1,6 @@
 import browser from "webextension-polyfill";
-import { filenameFromUrl } from "./media-detect";
+import { parseCompanionUrl } from "./companion";
+import { chooseDownloadRequest } from "./media-detect";
 import type {
   BackgroundRequest,
   BackgroundResponse,
@@ -80,17 +81,31 @@ function renderMediaList(items: DetectedMedia[]): void {
     url.textContent = item.url;
     url.title = item.url;
 
+    const copyButton = document.createElement("button");
+    copyButton.textContent = "📋";
+    copyButton.title = "Copy link";
+    copyButton.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(item.url);
+        copyButton.textContent = "✓";
+      } catch {
+        copyButton.textContent = "✗";
+      } finally {
+        setTimeout(() => (copyButton.textContent = "📋"), 1000);
+      }
+    });
+
     const button = document.createElement("button");
     button.textContent = "⬇";
     button.title = "Download";
     button.addEventListener("click", async () => {
       button.disabled = true;
-      const request: BackgroundRequest = {
-        type: "DOWNLOAD_URL",
+      const request = chooseDownloadRequest({
+        kind: item.kind,
         url: item.url,
-        filename: filenameFromUrl(item.url, item.kind),
         pageUrl: item.pageUrl,
-      };
+        sourceType: item.sourceType,
+      });
       const response = (await browser.runtime.sendMessage(request)) as BackgroundResponse;
       if (response.type === "DOWNLOAD_ERROR") {
         renderStatus({ state: "error", url: item.url, message: response.message });
@@ -98,7 +113,7 @@ function renderMediaList(items: DetectedMedia[]): void {
       button.disabled = false;
     });
 
-    li.append(kind, url, button);
+    li.append(kind, url, copyButton, button);
     mediaList.appendChild(li);
   }
 }
@@ -121,6 +136,100 @@ async function loadMediaList(): Promise<void> {
     mediaList.appendChild(li);
   }
 }
+
+const audioOnlyBox = document.getElementById("mdlx-audio-only") as HTMLInputElement;
+const encryptBox = document.getElementById("mdlx-encrypt") as HTMLInputElement;
+const stripMetadataBox = document.getElementById("mdlx-strip-metadata") as HTMLInputElement;
+const qualitySelect = document.getElementById("mdlx-quality") as HTMLSelectElement;
+const videoFormatSelect = document.getElementById("mdlx-video-format") as HTMLSelectElement;
+const audioFormatSelect = document.getElementById("mdlx-audio-format") as HTMLSelectElement;
+const qualityRow = document.getElementById("mdlx-quality-row") as HTMLLabelElement;
+const videoFormatRow = document.getElementById("mdlx-video-format-row") as HTMLLabelElement;
+const audioFormatRow = document.getElementById("mdlx-audio-format-row") as HTMLLabelElement;
+
+const DOWNLOAD_OPTION_KEYS = [
+  "audioOnly",
+  "encryptDownloads",
+  "stripMetadata",
+  "quality",
+  "videoFormat",
+  "audioFormat",
+] as const;
+
+function updateFormatRowVisibility(): void {
+  qualityRow.hidden = audioOnlyBox.checked;
+  videoFormatRow.hidden = audioOnlyBox.checked;
+  audioFormatRow.hidden = !audioOnlyBox.checked;
+}
+
+browser.storage.local.get([...DOWNLOAD_OPTION_KEYS]).then((stored) => {
+  audioOnlyBox.checked = stored.audioOnly === true;
+  encryptBox.checked = stored.encryptDownloads === true;
+  stripMetadataBox.checked = stored.stripMetadata === true;
+  if (typeof stored.quality === "string") qualitySelect.value = stored.quality;
+  if (typeof stored.videoFormat === "string") videoFormatSelect.value = stored.videoFormat;
+  if (typeof stored.audioFormat === "string") audioFormatSelect.value = stored.audioFormat;
+  updateFormatRowVisibility();
+});
+
+audioOnlyBox.addEventListener("change", () => {
+  void browser.storage.local.set({ audioOnly: audioOnlyBox.checked });
+  updateFormatRowVisibility();
+});
+encryptBox.addEventListener("change", () => {
+  void browser.storage.local.set({ encryptDownloads: encryptBox.checked });
+});
+stripMetadataBox.addEventListener("change", () => {
+  void browser.storage.local.set({ stripMetadata: stripMetadataBox.checked });
+});
+qualitySelect.addEventListener("change", () => {
+  void browser.storage.local.set({ quality: qualitySelect.value });
+});
+videoFormatSelect.addEventListener("change", () => {
+  void browser.storage.local.set({ videoFormat: videoFormatSelect.value });
+});
+audioFormatSelect.addEventListener("change", () => {
+  void browser.storage.local.set({ audioFormat: audioFormatSelect.value });
+});
+
+const companionInput = document.getElementById("mdlx-companion-input") as HTMLInputElement;
+const companionSave = document.getElementById("mdlx-companion-save") as HTMLButtonElement;
+const companionStatus = document.getElementById("mdlx-companion-status") as HTMLParagraphElement;
+
+function showCompanionStatus(text: string, isError: boolean): void {
+  companionStatus.textContent = text;
+  companionStatus.classList.toggle("mdlx-status-error", isError);
+  companionStatus.hidden = false;
+}
+
+browser.storage.local.get("companionServerUrl").then((stored) => {
+  if (typeof stored.companionServerUrl === "string") {
+    companionInput.value = stored.companionServerUrl;
+  }
+});
+
+companionSave.addEventListener("click", async () => {
+  const raw = companionInput.value.trim();
+  if (raw && !parseCompanionUrl(raw)) {
+    showCompanionStatus("Paste the full URL the server prints, including ?t=<token>.", true);
+    return;
+  }
+  await browser.storage.local.set({ companionServerUrl: raw });
+  showCompanionStatus(raw ? "Saved." : "Cleared.", false);
+});
+
+const nativeHostStatus = document.getElementById("mdlx-native-host-status") as HTMLParagraphElement;
+
+browser.runtime
+  .sendMessage({ type: "CHECK_NATIVE_HOST" } satisfies BackgroundRequest)
+  .then((raw: unknown) => {
+    const response = raw as BackgroundResponse;
+    const connected = response?.type === "NATIVE_HOST_STATUS" && response.connected;
+    nativeHostStatus.textContent = connected
+      ? "Native host: ✓ connected"
+      : "Native host: ✗ not reachable (see README > Install the native host)";
+    nativeHostStatus.classList.toggle("mdlx-status-error", !connected);
+  });
 
 browser.runtime.onMessage.addListener((raw: unknown) => {
   const message = raw as StatusBroadcast;

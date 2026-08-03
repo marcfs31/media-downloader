@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest import mock
 
 from media_downloader import host
-from media_downloader.downloader import DownloadError
+from media_downloader.downloader import DownloadError, DownloadOptions
 
 
 def encode(message: dict[str, object]) -> bytes:
@@ -50,6 +50,60 @@ class TestHandleDownload:
         assert messages[-1]["id"] == "req-1"
         assert messages[-1]["path"].endswith("v.mp4")
 
+    def test_audio_flag_passed_through_to_download(self, tmp_path: Path) -> None:
+        out = io.BytesIO()
+        with mock.patch.object(host, "download", return_value=tmp_path / "song.m4a") as mocked:
+            host.handle_download({"id": "req-audio", "url": "https://x.test/v", "audio": True}, out)
+        mocked.assert_called_once_with(
+            "https://x.test/v", host.DEFAULT_DEST, mock.ANY, DownloadOptions(audio_only=True)
+        )
+
+    def test_missing_audio_flag_defaults_to_video(self, tmp_path: Path) -> None:
+        out = io.BytesIO()
+        with mock.patch.object(host, "download", return_value=tmp_path / "v.mp4") as mocked:
+            host.handle_download({"id": "req-video", "url": "https://x.test/v"}, out)
+        mocked.assert_called_once_with(
+            "https://x.test/v", host.DEFAULT_DEST, mock.ANY, DownloadOptions()
+        )
+
+    def test_encrypt_flag_passed_through_to_download(self, tmp_path: Path) -> None:
+        out = io.BytesIO()
+        with mock.patch.object(host, "download", return_value=tmp_path / "v.mp4.enc") as mocked:
+            host.handle_download({"id": "req-enc", "url": "https://x.test/v", "encrypt": True}, out)
+        mocked.assert_called_once_with(
+            "https://x.test/v", host.DEFAULT_DEST, mock.ANY, DownloadOptions(encrypt=True)
+        )
+
+    def test_quality_and_format_flags_passed_through(self, tmp_path: Path) -> None:
+        out = io.BytesIO()
+        with mock.patch.object(host, "download", return_value=tmp_path / "v.mkv") as mocked:
+            host.handle_download(
+                {
+                    "id": "req-fmt",
+                    "url": "https://x.test/v",
+                    "quality": "720p",
+                    "video_format": "mkv",
+                    "download_all": True,
+                },
+                out,
+            )
+        mocked.assert_called_once_with(
+            "https://x.test/v",
+            host.DEFAULT_DEST,
+            mock.ANY,
+            DownloadOptions(quality="720p", video_format="mkv", download_all=True),
+        )
+
+    def test_strip_metadata_flag_passed_through(self, tmp_path: Path) -> None:
+        out = io.BytesIO()
+        with mock.patch.object(host, "download", return_value=tmp_path / "v.mp4") as mocked:
+            host.handle_download(
+                {"id": "req-strip", "url": "https://x.test/v", "strip_metadata": True}, out
+            )
+        mocked.assert_called_once_with(
+            "https://x.test/v", host.DEFAULT_DEST, mock.ANY, DownloadOptions(strip_metadata=True)
+        )
+
     def test_failure_emits_error(self) -> None:
         out = io.BytesIO()
         with mock.patch.object(host, "download", side_effect=DownloadError("nope")):
@@ -87,7 +141,7 @@ class TestStdoutHygiene:
         # whatever downloader holds at that moment — i.e. our stub.
         sitecustomize.write_text(
             "import media_downloader.downloader as d\n"
-            "def fake_download(url, dest, progress=None):\n"
+            "def fake_download(url, dest, progress=None, options=None):\n"
             "    print('\\r[download]  42% of 1.00MiB')\n"  # the yt-dlp bug, simulated
             "    from pathlib import Path\n"
             "    return Path('/tmp/fake.mp4')\n"

@@ -81,6 +81,45 @@
   color: #b3261e;
 }
 
+.mdlx-checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.mdlx-options {
+  margin-top: 10px;
+}
+
+.mdlx-options summary {
+  font-size: 12px;
+  cursor: pointer;
+  color: #2b6cb0;
+}
+
+.mdlx-select-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.mdlx-select-row select {
+  font-size: 12px;
+  padding: 2px 4px;
+}
+
+.mdlx-hint {
+  font-size: 11px;
+  opacity: 0.65;
+  margin: 10px 0 0;
+  line-height: 1.4;
+}
+
 .mdlx-media-list {
   list-style: none;
   margin: 0;

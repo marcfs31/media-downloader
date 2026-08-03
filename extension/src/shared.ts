@@ -14,24 +14,32 @@ export interface DetectedMedia {
   url: string;
   width?: number;
   height?: number;
+  /** Concatenated <source type="..."> MIME types, when present — used to
+   * spot codecs (AV1, VP9) common desktop players can't open. */
+  sourceType?: string;
   pageUrl: string;
 }
 
-export type ContentRequest = { type: "GET_PAGE_MEDIA" } | { type: "RESOLVE_BLOB"; url: string };
+export type ContentRequest = { type: "GET_PAGE_MEDIA" };
 
-export type ContentResponse =
-  { type: "PAGE_MEDIA"; items: DetectedMedia[] } | { type: "RESOLVED_BLOB"; dataUrl: string };
+export type ContentResponse = { type: "PAGE_MEDIA"; items: DetectedMedia[] };
 
 /** Messages sent to the background service worker from content scripts or the popup. */
 export type BackgroundRequest =
   | { type: "DOWNLOAD_URL"; url: string; filename?: string; pageUrl?: string }
   | { type: "DOWNLOAD_VIA_LINK"; url: string }
-  | { type: "GET_DOWNLOAD_STATE" };
+  | { type: "GET_DOWNLOAD_STATE" }
+  /** One-way: the content script's initial page scan reporting how much
+   * media it found, so the toolbar badge can show a count at a glance. */
+  | { type: "REPORT_MEDIA_COUNT"; count: number }
+  /** Popup diagnostic: is the native host actually reachable right now? */
+  | { type: "CHECK_NATIVE_HOST" };
 
 export type BackgroundResponse =
   | { type: "DOWNLOAD_STARTED" }
   | { type: "DOWNLOAD_ERROR"; message: string }
-  | { type: "DOWNLOAD_NEEDS_NATIVE_HOST"; url: string };
+  | { type: "DOWNLOAD_NEEDS_NATIVE_HOST"; url: string }
+  | { type: "NATIVE_HOST_STATUS"; connected: boolean };
 
 /** Progress broadcasts the background worker sends to any listening popup while
  * a native-host-backed (yt-dlp) download is in flight. */

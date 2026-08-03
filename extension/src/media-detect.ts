@@ -1,11 +1,20 @@
 // Pure DOM-scanning helpers, kept free of any browser.* extension API so they
-// can run under plain jsdom in tests. content.ts is the only caller that wires
-// these into the live page and the extension messaging layer.
-import type { DetectedMedia, MediaKind } from "./shared";
+// can run under plain jsdom in tests. content.ts, popup.ts, and background.ts
+// (for the context-menu entry) wire these into the live page/extension APIs.
+import type { BackgroundRequest, DetectedMedia, MediaKind } from "./shared";
 
 const MIN_BACKGROUND_AREA = 48 * 48;
 const MAX_BACKGROUND_SCAN_CANDIDATES = 3000;
 const BACKGROUND_URL_RE = /url\((['"]?)(.*?)\1\)/i;
+
+// AV1 and VP9 are the two common web video codecs with poor-to-nonexistent
+// support in default desktop players (QuickTime never learned AV1 at all;
+// VP9 is mostly a Chromium-family thing) even though the browser itself
+// decodes them fine in the page — which is exactly why a raw pass-through
+// download of the video element's URL can hand back a file nothing else can
+// open. Bounded by non-alphanumeric characters (or string edges) so this
+// doesn't false-positive on an unrelated substring like "davis1".
+const RISKY_CODEC_RE = /(?:^|[^a-z0-9])(av0?1|vp0?9)(?:[^a-z0-9]|$)/i;
 
 const MIME_TO_EXT: Record<string, string> = {
   "video/mp4": "mp4",
@@ -85,15 +94,70 @@ function isSubstantial(el: Element): boolean {
 }
 
 /** Given an element the user is hovering (or any element under the cursor),
- * walk up a few ancestors to find the nearest thing we know how to download. */
+ * walk up a few ancestors to find the nearest thing we know how to download.
+ *
+ * Custom player skins routinely overlay controls on top of the <video>
+ * element — a poster thumbnail, SVG/background-image play-pause-fullscreen
+ * icons — as *siblings* of the video, not ancestors of whatever's under the
+ * cursor. A plain ancestor walk hovering one of those icons or the poster
+ * would never reach the real <video>, and would happily "find" the icon's
+ * background-image or the poster <img> instead — downloading an SVG icon or
+ * a placeholder image rather than the actual media. So at every level we
+ * also search descendants for a real video/audio and prefer that over an
+ * img/background-image match, which is only used as a last-resort fallback
+ * if no video/audio turns up anywhere in the ancestor chain. */
 export function findMediaElement(target: Element, maxAncestors = 4): Element | null {
   let el: Element | null = target;
+  let fallback: Element | null = null;
+
   for (let i = 0; el && i <= maxAncestors; i++) {
-    if (el.matches("video, audio, img")) return el;
-    if (backgroundImageUrl(el)) return el;
+    if (el.matches("video, audio")) return el;
+    const nested = el.querySelector("video, audio");
+    if (nested) return nested;
+    if (!fallback && (el.matches("img") || backgroundImageUrl(el))) fallback = el;
     el = el.parentElement;
   }
-  return null;
+  return fallback;
+}
+
+/** True when the URL (or a <source> element's declared MIME type) names a
+ * codec that common desktop players can't be trusted to open, even though
+ * the browser played it fine in-page. Used to decide whether a direct
+ * pass-through download is safe, or whether the link needs to go through
+ * the yt-dlp-backed pipeline instead (which prefers H.264/AAC). */
+export function looksCodecIncompatible(url: string, sourceType?: string | null): boolean {
+  if (sourceType && RISKY_CODEC_RE.test(sourceType)) return true;
+  return RISKY_CODEC_RE.test(url);
+}
+
+/** The single "how should this media actually get downloaded" decision,
+ * shared by the hover button (content.ts), the popup's per-item list, and
+ * the right-click context-menu entry (background.ts) — previously
+ * duplicated between the first two. blob: video/audio (MediaSource object
+ * URLs, unfetchable in principle) and AV1/VP9 (browser-playable but not
+ * desktop-player-playable) both need the yt-dlp-backed pipeline instead of
+ * a raw pass-through download. */
+export function chooseDownloadRequest(params: {
+  kind: MediaKind;
+  url: string;
+  pageUrl: string;
+  sourceType?: string;
+}): BackgroundRequest {
+  const { kind, url, pageUrl, sourceType } = params;
+  if (
+    (kind === "video" || kind === "audio") &&
+    (url.startsWith("blob:") || looksCodecIncompatible(url, sourceType))
+  ) {
+    return { type: "DOWNLOAD_VIA_LINK", url: pageUrl };
+  }
+  return { type: "DOWNLOAD_URL", url, filename: filenameFromUrl(url, kind), pageUrl };
+}
+
+function sourceTypesOf(media: HTMLMediaElement): string | undefined {
+  const types = Array.from(media.querySelectorAll("source"))
+    .map((s) => s.getAttribute("type"))
+    .filter((t): t is string => !!t);
+  return types.length > 0 ? types.join("; ") : undefined;
 }
 
 /** Resolves the concrete media URL + kind for an element previously returned
@@ -101,7 +165,7 @@ export function findMediaElement(target: Element, maxAncestors = 4): Element | n
 export function resolveMediaUrl(
   el: Element,
   pageUrl: string,
-): { kind: MediaKind; url: string; width?: number; height?: number } | null {
+): { kind: MediaKind; url: string; width?: number; height?: number; sourceType?: string } | null {
   const tag = el.tagName.toLowerCase();
 
   if (tag === "video" || tag === "audio") {
@@ -117,6 +181,7 @@ export function resolveMediaUrl(
       url: toAbsolute(src, pageUrl),
       width: rect?.width,
       height: rect?.height,
+      sourceType: sourceTypesOf(media),
     };
   }
 
@@ -163,6 +228,7 @@ export function scanDocumentForMedia(root: ParentNode, pageUrl: string): Detecte
       url: resolved.url,
       width: resolved.width,
       height: resolved.height,
+      sourceType: resolved.sourceType,
       pageUrl,
     });
   };
