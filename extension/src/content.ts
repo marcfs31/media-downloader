@@ -30,7 +30,15 @@ button.textContent = "⬇";
 button.style.display = "none";
 
 function attachButton() {
-  if (document.body && !button.isConnected) {
+  // Re-append (not just append-once): appendChild on an already-connected
+  // node moves it rather than cloning it, which keeps the button as body's
+  // *last* child on every show. Sites with their own position:fixed overlays
+  // at the same max z-index (ad interstitials, "click anywhere" popunder
+  // layers) win a z-index tie by DOM order — appending once at first hover
+  // meant anything the page added to <body> afterward could end up stacked
+  // above us, silently swallowing the click before it ever reached the
+  // button, which looked identical to the click handler doing nothing.
+  if (document.body) {
     document.body.appendChild(button);
   }
 }

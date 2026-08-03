@@ -2,8 +2,14 @@
    content.ts injects this into every page the extension runs on. */
 
 .mdlx-download-btn {
-  position: fixed;
-  z-index: 2147483647;
+  /* !important on the properties that matter for actually receiving the
+     click: some ad-heavy pages ship their own !important rules (interstitial
+     overlays, click-protection layers) that would otherwise be able to beat
+     a plain inline style and either cover the button or make it unclickable
+     without visibly changing how it looks. */
+  position: fixed !important;
+  z-index: 2147483647 !important;
+  pointer-events: auto !important;
   width: 28px;
   height: 28px;
   display: none;
