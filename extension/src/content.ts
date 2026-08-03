@@ -92,7 +92,14 @@ button.addEventListener("mouseenter", cancelHide);
 button.addEventListener("mouseleave", scheduleHide);
 
 button.addEventListener("click", async () => {
-  if (!currentAnchor) return;
+  if (!currentAnchor) {
+    // Distinguishes "the click reached us but there was nothing to act on"
+    // from "the click never reached this handler at all" (e.g. a page-level
+    // capture-phase listener swallowing it first) — both look identical from
+    // the user's side, but only one of them leaves this line in the console.
+    console.warn("Media Downloader: click landed with no active hover target");
+    return;
+  }
   // Everything below — including re-resolving the anchor — runs inside the
   // try/finally so the button always ends up showing ✓/✗ and re-enabling
   // itself. Previously the re-resolution ran *before* this block, so a throw
