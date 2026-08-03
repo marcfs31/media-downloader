@@ -1,6 +1,7 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import {
   chooseDownloadRequest,
+  chooseDownloadRequestForElement,
   extensionForMime,
   filenameFromUrl,
   findMediaElement,
@@ -271,5 +272,87 @@ describe("chooseDownloadRequest", () => {
       sourceType: 'video/mp4; codecs="av01.0.05M.08"',
     });
     expect(request).toEqual({ type: "DOWNLOAD_VIA_LINK", url: "https://example.com/page" });
+  });
+});
+
+describe("chooseDownloadRequestForElement", () => {
+  // The exact reported shape: a "recommended videos" rail where each card is
+  // just a thumbnail <img> wrapped in a link to that video's own page — no
+  // <video> element exists here at all, so a plain download just grabs the
+  // .webp thumbnail. The real fix is routing through the linked page instead.
+  it("routes a linked thumbnail through its page instead of downloading the image", () => {
+    document.body.innerHTML = `
+      <a href="/videos/some-other-video">
+        <img src="https://example.com/thumb.webp">
+      </a>`;
+    const img = document.querySelector("img")!;
+    const request = chooseDownloadRequestForElement(img, "https://example.com/page");
+    expect(request).toEqual({
+      type: "DOWNLOAD_VIA_LINK",
+      url: "https://example.com/videos/some-other-video",
+    });
+  });
+
+  it("downloads the image directly when it isn't wrapped in a link", () => {
+    document.body.innerHTML = `<img src="https://example.com/thumb.webp">`;
+    const img = document.querySelector("img")!;
+    const request = chooseDownloadRequestForElement(img, "https://example.com/page");
+    expect(request).toEqual({
+      type: "DOWNLOAD_URL",
+      url: "https://example.com/thumb.webp",
+      filename: "thumb.webp",
+      pageUrl: "https://example.com/page",
+    });
+  });
+
+  it("does not reroute a link to a cross-origin page", () => {
+    document.body.innerHTML = `
+      <a href="https://other-site.test/videos/x">
+        <img src="https://example.com/thumb.webp">
+      </a>`;
+    const img = document.querySelector("img")!;
+    const request = chooseDownloadRequestForElement(img, "https://example.com/page");
+    expect(request?.type).toBe("DOWNLOAD_URL");
+  });
+
+  it("does not reroute a link whose target is itself a direct media file", () => {
+    document.body.innerHTML = `
+      <a href="https://example.com/full-size.jpg">
+        <img src="https://example.com/thumb.webp">
+      </a>`;
+    const img = document.querySelector("img")!;
+    const request = chooseDownloadRequestForElement(img, "https://example.com/page");
+    expect(request?.type).toBe("DOWNLOAD_URL");
+  });
+
+  it("does not reroute a same-page fragment link", () => {
+    document.body.innerHTML = `
+      <a href="#gallery-item-3">
+        <img src="https://example.com/thumb.webp">
+      </a>`;
+    const img = document.querySelector("img")!;
+    const request = chooseDownloadRequestForElement(img, "https://example.com/page");
+    expect(request?.type).toBe("DOWNLOAD_URL");
+  });
+
+  it("never reroutes a real video match even if it's wrapped in a link", () => {
+    document.body.innerHTML = `
+      <a href="/videos/some-other-video">
+        <video src="https://example.com/clip.mp4"></video>
+      </a>`;
+    const video = document.querySelector("video")!;
+    const request = chooseDownloadRequestForElement(video, "https://example.com/page");
+    expect(request).toEqual({
+      type: "DOWNLOAD_URL",
+      url: "https://example.com/clip.mp4",
+      filename: "clip.mp4",
+      pageUrl: "https://example.com/page",
+    });
+  });
+
+  it("returns null when nothing resolvable is found", () => {
+    document.body.innerHTML = `<div><span>plain text</span></div>`;
+    const span = document.querySelector("span")!;
+    expect(chooseDownloadRequestForElement(span, "https://example.com/page")).toBeNull();
   });
 });

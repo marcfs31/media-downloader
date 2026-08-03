@@ -5,10 +5,15 @@ import browser from "webextension-polyfill";
 import {
   findMediaElement,
   resolveMediaUrl,
-  chooseDownloadRequest,
+  chooseDownloadRequestForElement,
   scanDocumentForMedia,
 } from "./media-detect";
-import type { BackgroundResponse, ContentRequest, ContentResponse, MediaKind } from "./shared";
+import type {
+  BackgroundRequest,
+  BackgroundResponse,
+  ContentRequest,
+  ContentResponse,
+} from "./shared";
 
 const HIDE_DELAY_MS = 250;
 
@@ -121,12 +126,12 @@ button.addEventListener("click", async () => {
     // Re-run detection fresh rather than reusing whatever was resolved back
     // at mouseover time — see currentAnchor's comment for why that matters.
     const mediaEl = findMediaElement(currentAnchor);
-    const resolved = mediaEl ? resolveMediaUrl(mediaEl, location.href) : null;
-    if (!resolved) {
+    const request = mediaEl ? chooseDownloadRequestForElement(mediaEl, location.href) : null;
+    if (!request) {
       button.textContent = "✗";
       return;
     }
-    await downloadResolved(resolved);
+    await sendDownloadRequest(request);
     button.textContent = "✓";
   } catch (err) {
     console.error("Media Downloader: download failed", err);
@@ -139,17 +144,7 @@ button.addEventListener("click", async () => {
   }
 });
 
-async function downloadResolved(target: {
-  kind: MediaKind;
-  url: string;
-  sourceType?: string;
-}): Promise<void> {
-  const request = chooseDownloadRequest({
-    kind: target.kind,
-    url: target.url,
-    pageUrl: location.href,
-    sourceType: target.sourceType,
-  });
+async function sendDownloadRequest(request: BackgroundRequest): Promise<void> {
   const response = (await browser.runtime.sendMessage(request)) as BackgroundResponse;
   if (response?.type === "DOWNLOAD_ERROR") {
     throw new Error(response.message);

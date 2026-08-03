@@ -153,6 +153,75 @@ export function chooseDownloadRequest(params: {
   return { type: "DOWNLOAD_URL", url, filename: filenameFromUrl(url, kind), pageUrl };
 }
 
+const MEDIA_FILE_PATH_RE =
+  /\.(mp4|webm|mov|mkv|avi|mp3|m4a|wav|oga|ogg|weba|flac|jpe?g|png|gif|webp|avif|svg|bmp|pdf)$/i;
+
+function isLikelyMediaFileUrl(url: string): boolean {
+  try {
+    return MEDIA_FILE_PATH_RE.test(new URL(url).pathname);
+  } catch {
+    return MEDIA_FILE_PATH_RE.test(url);
+  }
+}
+
+/** Walks up from a fallback image match looking for a same-origin link to
+ * another page — the shape of "recommended videos" rails: each item is just
+ * a thumbnail + link, with no <video> actually loaded until you open that
+ * item's own page. Downloading the thumbnail literally is essentially never
+ * what "download this video" means there. Restricted to same-origin links to
+ * something that isn't itself a direct media file, so this doesn't hijack a
+ * "click to view full-size image" link or an unrelated cross-site link. */
+function linkedPageUrl(el: Element, pageUrl: string, maxAncestors = 4): string | null {
+  let base: URL;
+  try {
+    base = new URL(pageUrl);
+  } catch {
+    return null;
+  }
+  let node: Element | null = el;
+  for (let i = 0; node && i <= maxAncestors; i++) {
+    if (node.matches("a[href]")) {
+      const href = node.getAttribute("href") ?? "";
+      if (!href || href.startsWith("#") || href.startsWith("javascript:")) return null;
+      let absolute: URL;
+      try {
+        absolute = new URL(href, pageUrl);
+      } catch {
+        return null;
+      }
+      if (absolute.origin !== base.origin) return null;
+      if (absolute.pathname === base.pathname && absolute.search === base.search) return null;
+      if (isLikelyMediaFileUrl(absolute.toString())) return null;
+      return absolute.toString();
+    }
+    node = node.parentElement;
+  }
+  return null;
+}
+
+/** Element-aware wrapper around chooseDownloadRequest for content.ts's hover
+ * button, where a live DOM element (not just a resolved kind/url pair) is
+ * available. Adds the one case chooseDownloadRequest can't see on its own:
+ * a fallback image match that's actually a thumbnail linking to another
+ * page — see linkedPageUrl. */
+export function chooseDownloadRequestForElement(
+  el: Element,
+  pageUrl: string,
+): BackgroundRequest | null {
+  const resolved = resolveMediaUrl(el, pageUrl);
+  if (!resolved) return null;
+  if (resolved.kind === "image") {
+    const linked = linkedPageUrl(el, pageUrl);
+    if (linked) return { type: "DOWNLOAD_VIA_LINK", url: linked };
+  }
+  return chooseDownloadRequest({
+    kind: resolved.kind,
+    url: resolved.url,
+    pageUrl,
+    sourceType: resolved.sourceType,
+  });
+}
+
 function sourceTypesOf(media: HTMLMediaElement): string | undefined {
   const types = Array.from(media.querySelectorAll("source"))
     .map((s) => s.getAttribute("type"))
