@@ -40,7 +40,7 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from .certs import get_or_create_cert
 from .crypto import decrypt_bytes, display_name, get_or_create_key
@@ -142,6 +142,25 @@ class JobStore:
         except Exception as exc:  # report, never kill the worker thread
             job.state = "error"
             job.message = f"Unexpected: {exc}"
+
+
+def content_disposition(filename: str) -> str:
+    """Builds a Content-Disposition header safe for any filename, including
+    yt-dlp's %(title)s output (which can contain emoji, CJK, or anything
+    else a video's title has). HTTP headers must be Latin-1-encodable
+    (http.server's send_header enforces this strictly) — sending a raw
+    non-ASCII filename crashes the request mid-response instead of just
+    looking wrong, so this always encodes rather than only when needed.
+
+    RFC 6266: an ASCII-safe `filename` for clients that ignore filename*,
+    plus an RFC 5987-encoded `filename*=UTF-8''...` for those that support
+    the real name.
+    """
+    ascii_fallback = filename.encode("ascii", "ignore").decode("ascii").replace('"', "").strip()
+    utf8_encoded = quote(filename, safe="")
+    return (
+        f"attachment; filename=\"{ascii_fallback or 'download'}\"; filename*=UTF-8''{utf8_encoded}"
+    )
 
 
 def sweep_old_files(dest: Path, keep_days: float, now: float | None = None) -> list[Path]:
@@ -524,9 +543,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(data)))
-            self.send_header(
-                "Content-Disposition", f'attachment; filename="{name.replace(chr(34), "")}"'
-            )
+            self.send_header("Content-Disposition", content_disposition(name))
             self.end_headers()
             self.wfile.write(data)
             return
@@ -536,10 +553,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(size))
-        self.send_header(
-            "Content-Disposition",
-            f'attachment; filename="{job.path.name.replace(chr(34), "")}"',
-        )
+        self.send_header("Content-Disposition", content_disposition(job.path.name))
         self.end_headers()
         with open(job.path, "rb") as fh:
             while chunk := fh.read(256 * 1024):

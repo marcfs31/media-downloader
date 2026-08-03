@@ -436,3 +436,66 @@ class TestQualityAndFormatFields:
         )
         assert status == 400
         assert "quality" in json.loads(body)["error"].lower()
+
+
+class TestContentDisposition:
+    def test_ascii_filename_passes_through_unchanged(self) -> None:
+        header = server_mod.content_disposition("clip.mp4")
+        assert header == "attachment; filename=\"clip.mp4\"; filename*=UTF-8''clip.mp4"
+
+    def test_header_is_latin1_encodable_for_any_unicode_filename(self) -> None:
+        # Regression: yt-dlp names files after the video's title
+        # (%(title)s), which can contain anything — emoji, CJK, whatever the
+        # uploader wrote. http.server's send_header encodes headers as
+        # Latin-1 strictly; a raw non-ASCII filename raised
+        # UnicodeEncodeError mid-response, dropping the connection entirely
+        # (curl saw "Empty reply from server") instead of erroring cleanly.
+        names = [
+            "Besarías A Estos Futbolistas 💋 #futbolpibes.mp4",
+            "日本語のタイトル.mp4",
+            "🎬🎥📹 emoji soup.mp4",
+        ]
+        for name in names:
+            header = server_mod.content_disposition(name)
+            header.encode("latin-1")  # raises if this regresses
+
+    def test_ascii_fallback_strips_non_ascii_but_keeps_something_usable(self) -> None:
+        header = server_mod.content_disposition("Besarías 💋 clip.mp4")
+        assert 'filename="Besaras  clip.mp4"' in header
+
+    def test_utf8_extended_parameter_round_trips(self) -> None:
+        from urllib.parse import unquote
+
+        header = server_mod.content_disposition("日本語.mp4")
+        star_param = header.split("filename*=UTF-8''")[1]
+        assert unquote(star_param) == "日本語.mp4"
+
+    def test_quotes_in_filename_are_stripped_from_ascii_fallback(self) -> None:
+        header = server_mod.content_disposition('evil".mp4')
+        assert '""' not in header
+
+    def test_falls_back_to_download_when_nothing_ascii_survives(self) -> None:
+        header = server_mod.content_disposition("💋💋💋")  # no extension either
+        assert 'filename="download"' in header
+
+
+class TestServeFileWithUnicodeFilename:
+    def test_downloading_a_file_with_emoji_in_the_name_does_not_crash(
+        self, running_server: str, tmp_path: Path
+    ) -> None:
+        # End-to-end regression for the exact reported failure.
+        def fake_download(
+            url: str, dest: Path, progress: object = None, options: Any = None
+        ) -> Path:
+            out = dest / "Besarías A Estos Futbolistas 💋 #futbolpibes.mp4"
+            out.write_bytes(b"video bytes")
+            return out
+
+        with mock.patch.object(server_mod, "download", side_effect=fake_download):
+            _, body = post_json(running_server, "/api/download", {"url": "https://x.test/v"})
+            job_id = json.loads(body)["id"]
+            wait_for_state(running_server, job_id, "done")
+
+        status, content = get(running_server, f"/files/{job_id}")
+        assert status == 200
+        assert content == b"video bytes"
