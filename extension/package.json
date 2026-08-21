@@ -1,6 +1,6 @@
 {
   "name": "media-downloader-extension",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Browser extension that surfaces a download control on media found on the current page, and can download an arbitrary link's media via a native-host/yt-dlp backend.",
   "type": "module",
