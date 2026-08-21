@@ -144,7 +144,7 @@ class JobStore:
             job.message = f"Unexpected: {exc}"
 
 
-def content_disposition(filename: str) -> str:
+def content_disposition(filename: str, inline: bool = False) -> str:
     """Builds a Content-Disposition header safe for any filename, including
     yt-dlp's %(title)s output (which can contain emoji, CJK, or anything
     else a video's title has). HTTP headers must be Latin-1-encodable
@@ -154,13 +154,16 @@ def content_disposition(filename: str) -> str:
 
     RFC 6266: an ASCII-safe `filename` for clients that ignore filename*,
     plus an RFC 5987-encoded `filename*=UTF-8''...` for those that support
-    the real name.
+    the real name. inline lets the browser render the file (video/image
+    playback) instead of forcing a save-as — a plain client-side anchor
+    without a download attribute isn't enough on its own, since this header
+    overrides it either way.
     """
     ascii_fallback = filename.encode("ascii", "ignore").decode("ascii").replace('"', "").strip()
     utf8_encoded = quote(filename, safe="")
-    return (
-        f"attachment; filename=\"{ascii_fallback or 'download'}\"; filename*=UTF-8''{utf8_encoded}"
-    )
+    disposition = "inline" if inline else "attachment"
+    ascii_part = f'{disposition}; filename="{ascii_fallback or "download"}"'
+    return f"{ascii_part}; filename*=UTF-8''{utf8_encoded}"
 
 
 def sweep_old_files(dest: Path, keep_days: float, now: float | None = None) -> list[Path]:
@@ -222,7 +225,9 @@ PAGE_TEMPLATE = """<!doctype html>
          background: color-mix(in srgb, CanvasText 12%, Canvas); overflow: hidden; }
   .bar > div { height: 100%; background: #2b6cb0; transition: width .4s; }
   .err { color: #d33; font-size: 14px; margin-top: 6px; }
-  a.save { display: inline-block; margin-top: 8px; font-weight: 600; color: #2b6cb0; }
+  .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; align-items: center; }
+  .actions a, .actions button { font-weight: 600; color: #2b6cb0; }
+  .actions button { background: none; border: 0; padding: 0; font: inherit; cursor: pointer; }
   .meta { font-size: 13px; opacity: .75; margin-top: 6px; }
   .checksum { font-size: 11px; opacity: .55; margin-top: 4px; word-break: break-all; }
   .opts { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-top: 12px; }
@@ -351,56 +356,156 @@ form.addEventListener("submit", async (e) => {
   } catch (err) { alert(err.message || err); }
 });
 
+function fileUrl(jobId) {
+  return "/files/" + jobId + "?t=" + encodeURIComponent(TOKEN);
+}
+
+async function copyToClipboard(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (err) { /* fall through to the legacy path below */ }
+  }
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.position = "fixed";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch (err) { ok = false; }
+  document.body.removeChild(ta);
+  return ok;
+}
+
+function tagsFor(job, u) {
+  if (job.audio_only) {
+    const tag = document.createElement("span");
+    tag.className = "tag"; tag.textContent = "audio";
+    u.appendChild(tag);
+  }
+  if (job.encrypt) {
+    const tag = document.createElement("span");
+    tag.className = "tag"; tag.textContent = "encrypted";
+    u.appendChild(tag);
+  }
+  if (job.strip_metadata) {
+    const tag = document.createElement("span");
+    tag.className = "tag"; tag.textContent = "stripped";
+    u.appendChild(tag);
+  }
+}
+
+function buildDoneLi(job) {
+  const li = document.createElement("li");
+  const u = document.createElement("div");
+  u.className = "u"; u.textContent = job.url;
+  tagsFor(job, u);
+  li.appendChild(u);
+
+  const actions = document.createElement("div");
+  actions.className = "actions";
+  const url = fileUrl(job.id);
+
+  // Opens inline (video/image playback in a new tab) instead of forcing a
+  // save — the phone's own share sheet from there covers "save to Photos"
+  // on browsers (iOS Safari) that ignore the download attribute below.
+  const view = document.createElement("a");
+  view.href = url + "&view=1"; view.target = "_blank"; view.rel = "noopener";
+  view.textContent = "View";
+  actions.appendChild(view);
+
+  const save = document.createElement("a");
+  save.href = url;
+  save.setAttribute("download", job.filename || "download");
+  save.textContent = "Save";
+  actions.appendChild(save);
+
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.textContent = "Copy link";
+  copy.addEventListener("click", async () => {
+    const ok = await copyToClipboard(location.origin + url);
+    copy.textContent = ok ? "Copied!" : "Copy failed";
+    setTimeout(() => { copy.textContent = "Copy link"; }, 1500);
+  });
+  actions.appendChild(copy);
+
+  li.appendChild(actions);
+
+  const name = document.createElement("div");
+  name.className = "meta"; name.textContent = job.filename || "file";
+  li.appendChild(name);
+
+  if (job.checksum) {
+    const c = document.createElement("div");
+    c.className = "checksum"; c.textContent = "sha256: " + job.checksum;
+    li.appendChild(c);
+  }
+  return li;
+}
+
+function buildPendingLi(job) {
+  const li = document.createElement("li");
+  const u = document.createElement("div");
+  u.className = "u"; u.textContent = job.url;
+  tagsFor(job, u);
+  li.appendChild(u);
+  if (job.state === "error") {
+    const p = document.createElement("div");
+    p.className = "err"; p.textContent = job.message || "Failed";
+    li.appendChild(p);
+  } else {
+    const bar = document.createElement("div"); bar.className = "bar";
+    const fill = document.createElement("div");
+    fill.style.width = (job.percent || 0) + "%";
+    bar.appendChild(fill); li.appendChild(bar);
+    const meta = document.createElement("div"); meta.className = "meta";
+    meta.textContent = job.state === "queued" ? "Queued…"
+      : "Downloading… " + (job.percent ? job.percent.toFixed(0) + "%" : "")
+        + (job.speed ? " · " + job.speed : "");
+    li.appendChild(meta);
+  }
+  return li;
+}
+
+// job.id -> { li, state }. A finished job's <li> (with its Save/View/Copy
+// links) is built once and never rebuilt or moved again on later refreshes:
+// on mobile, a long-press "copy link"/context-menu gesture takes long enough
+// that the old rebuild-everything-every-1.2s approach would yank the target
+// element out of the DOM mid-gesture, silently cancelling it.
+const renderedItems = new Map();
+
 function render(jobs) {
-  list.innerHTML = "";
-  for (const job of jobs.reverse()) {
-    const li = document.createElement("li");
-    const u = document.createElement("div");
-    u.className = "u"; u.textContent = job.url;
-    if (job.audio_only) {
-      const tag = document.createElement("span");
-      tag.className = "tag"; tag.textContent = "audio";
-      u.appendChild(tag);
+  const order = jobs.slice().reverse();
+  const seenIds = new Set(order.map((job) => job.id));
+
+  for (const [id, entry] of renderedItems) {
+    if (!seenIds.has(id)) {
+      entry.li.remove();
+      renderedItems.delete(id);
     }
-    if (job.encrypt) {
-      const tag = document.createElement("span");
-      tag.className = "tag"; tag.textContent = "encrypted";
-      u.appendChild(tag);
-    }
-    if (job.strip_metadata) {
-      const tag = document.createElement("span");
-      tag.className = "tag"; tag.textContent = "stripped";
-      u.appendChild(tag);
-    }
-    li.appendChild(u);
-    if (job.state === "done") {
-      const a = document.createElement("a");
-      a.className = "save";
-      a.href = "/files/" + job.id + "?t=" + encodeURIComponent(TOKEN);
-      a.setAttribute("download", job.filename || "download");
-      a.textContent = "Save “" + (job.filename || "file") + "”";
-      li.appendChild(a);
-      if (job.checksum) {
-        const c = document.createElement("div");
-        c.className = "checksum"; c.textContent = "sha256: " + job.checksum;
-        li.appendChild(c);
-      }
-    } else if (job.state === "error") {
-      const p = document.createElement("div");
-      p.className = "err"; p.textContent = job.message || "Failed";
-      li.appendChild(p);
+  }
+
+  let anchor = list.firstChild;
+  for (const job of order) {
+    const existing = renderedItems.get(job.id);
+    let li;
+    if (existing && existing.state === "done") {
+      li = existing.li;
+    } else if (job.state === "done") {
+      li = buildDoneLi(job);
+      if (existing) existing.li.replaceWith(li);
+      renderedItems.set(job.id, { li, state: "done" });
     } else {
-      const bar = document.createElement("div"); bar.className = "bar";
-      const fill = document.createElement("div");
-      fill.style.width = (job.percent || 0) + "%";
-      bar.appendChild(fill); li.appendChild(bar);
-      const meta = document.createElement("div"); meta.className = "meta";
-      meta.textContent = job.state === "queued" ? "Queued…"
-        : "Downloading… " + (job.percent ? job.percent.toFixed(0) + "%" : "")
-          + (job.speed ? " · " + job.speed : "");
-      li.appendChild(meta);
+      li = buildPendingLi(job);
+      if (existing) existing.li.replaceWith(li);
+      renderedItems.set(job.id, { li, state: job.state });
     }
-    list.appendChild(li);
+    if (li !== anchor) list.insertBefore(li, anchor);
+    anchor = li.nextSibling;
   }
 }
 
@@ -530,6 +635,9 @@ class RequestHandler(BaseHTTPRequestHandler):
             self._send_json(404, {"error": "file not ready"})
             return
 
+        query = parse_qs(urlparse(self.path).query)
+        inline = (query.get("view") or ["0"])[0] == "1"
+
         if job.options.encrypt:
             # Decrypted only transiently, in memory, to serve this one
             # request — the on-disk copy stays ciphertext.
@@ -543,7 +651,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(data)))
-            self.send_header("Content-Disposition", content_disposition(name))
+            self.send_header("Content-Disposition", content_disposition(name, inline=inline))
             self.end_headers()
             self.wfile.write(data)
             return
@@ -553,7 +661,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(size))
-        self.send_header("Content-Disposition", content_disposition(job.path.name))
+        self.send_header("Content-Disposition", content_disposition(job.path.name, inline=inline))
         self.end_headers()
         with open(job.path, "rb") as fh:
             while chunk := fh.read(256 * 1024):

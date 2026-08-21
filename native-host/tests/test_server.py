@@ -140,6 +140,25 @@ class TestDownloadFlow:
         assert status == 200
         assert content == b"fake video bytes"
 
+    def test_view_param_serves_inline_disposition(self, running_server: str) -> None:
+        def fake_download(
+            url: str, dest: Path, progress: object = None, options: object = None
+        ) -> Path:
+            out = dest / "clip.mp4"
+            out.write_bytes(b"fake video bytes")
+            return out
+
+        with mock.patch.object(server_mod, "download", side_effect=fake_download):
+            _, body = post_json(running_server, "/api/download", {"url": "https://x.test/v"})
+            job_id = json.loads(body)["id"]
+            wait_for_state(running_server, job_id, "done")
+
+        with urllib.request.urlopen(f"{running_server}/files/{job_id}?t={TOKEN}&view=1") as res:
+            assert res.headers["Content-Disposition"].startswith("inline;")
+
+        with urllib.request.urlopen(f"{running_server}/files/{job_id}?t={TOKEN}") as res:
+            assert res.headers["Content-Disposition"].startswith("attachment;")
+
     def test_failure_surfaces_error_message(self, running_server: str) -> None:
         with mock.patch.object(server_mod, "download", side_effect=DownloadError("no dice")):
             _, body = post_json(running_server, "/api/download", {"url": "https://x.test/v"})
@@ -477,6 +496,15 @@ class TestContentDisposition:
     def test_falls_back_to_download_when_nothing_ascii_survives(self) -> None:
         header = server_mod.content_disposition("💋💋💋")  # no extension either
         assert 'filename="download"' in header
+
+    def test_defaults_to_attachment(self) -> None:
+        header = server_mod.content_disposition("clip.mp4")
+        assert header.startswith("attachment;")
+
+    def test_inline_true_switches_disposition(self) -> None:
+        header = server_mod.content_disposition("clip.mp4", inline=True)
+        assert header.startswith("inline;")
+        assert 'filename="clip.mp4"' in header
 
 
 class TestServeFileWithUnicodeFilename:
