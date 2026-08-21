@@ -9,10 +9,15 @@ import pytest
 from media_downloader.downloader import (
     DownloadError,
     DrmProtectedError,
+    _fetch_tiktok_item,
     _looks_drm_protected,
+    _tiktok_live_photo_url,
+    _tiktok_photo_match,
     classify_url,
     download_direct,
+    download_tiktok_photo_post,
     filename_from_response,
+    inspect_post,
     unique_path,
     url_extension,
 )
@@ -70,6 +75,245 @@ class TestClassifyUrl:
     def test_rejects_non_http(self) -> None:
         with pytest.raises(DownloadError):
             classify_url("file:///etc/passwd", head_check=False)
+
+
+def fake_tiktok_page(
+    images: list[str | dict[str, Any]] | None = None,
+    music_url: str | None = "https://cdn.test/song.m4a",
+) -> str:
+    """Builds a synthetic page body shaped like TikTok's own
+    __UNIVERSAL_DATA_FOR_REHYDRATION__ payload, with fabricated
+    (non-real) image/music URLs — enough to exercise the parser without
+    depending on TikTok's actual page structure or real post content. A
+    plain string builds an ordinary {imageURL: {urlList: [...]}} slide; a
+    dict is used as the raw image object as-is, for tests that need to add
+    a Live Photo's "video" field alongside imageURL."""
+    import json
+
+    item: dict[str, Any] = {"id": "123456", "desc": "test post"}
+    if images is not None:
+        item["imagePost"] = {
+            "images": [
+                img if isinstance(img, dict) else {"imageURL": {"urlList": [img]}} for img in images
+            ]
+        }
+    if music_url is not None:
+        item["music"] = {"playUrl": music_url}
+    payload = {
+        "__DEFAULT_SCOPE__": {
+            "webapp.video-detail": {"itemInfo": {"itemStruct": item}},
+        }
+    }
+    return (
+        "<html><body>"
+        f'<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__">{json.dumps(payload)}</script>'
+        "</body></html>"
+    )
+
+
+class TestTiktokPhotoMatch:
+    def test_matches_photo_url(self) -> None:
+        match = _tiktok_photo_match("https://www.tiktok.com/@someone/photo/123456")
+        assert match is not None
+        assert match.group("user") == "@someone"
+        assert match.group("id") == "123456"
+
+    def test_resolves_short_link(self) -> None:
+        head = fake_response()
+        head.url = "https://www.tiktok.com/@someone/photo/123456"
+        with mock.patch("requests.head", return_value=head):
+            match = _tiktok_photo_match("https://vm.tiktok.com/ZN885784b")
+        assert match is not None
+        assert match.group("id") == "123456"
+
+    def test_ignores_video_url(self) -> None:
+        assert _tiktok_photo_match("https://www.tiktok.com/@someone/video/123456") is None
+
+    def test_short_link_resolution_failure_falls_through(self) -> None:
+        import requests
+
+        with mock.patch("requests.head", side_effect=requests.ConnectionError):
+            assert _tiktok_photo_match("https://vm.tiktok.com/ZN885784b") is None
+
+    def test_ignores_unrelated_url(self) -> None:
+        assert _tiktok_photo_match("https://example.test/watch?v=123") is None
+
+
+class TestFetchTiktokItem:
+    def test_extracts_image_post(self) -> None:
+        page = fake_response(headers={"content-type": "text/html"})
+        page.text = fake_tiktok_page(images=["https://cdn.test/a.jpg", "https://cdn.test/b.jpg"])
+        with mock.patch("requests.get", return_value=page):
+            item = _fetch_tiktok_item("@someone", "123456")
+        assert len(item["imagePost"]["images"]) == 2  # type: ignore[index]
+
+    def test_rejects_non_photo_post(self) -> None:
+        page = fake_response(headers={"content-type": "text/html"})
+        page.text = fake_tiktok_page(images=None)
+        with mock.patch("requests.get", return_value=page):
+            with pytest.raises(DownloadError, match="isn't a photo post"):
+                _fetch_tiktok_item("@someone", "123456")
+
+    def test_missing_universal_data_script(self) -> None:
+        page = fake_response(headers={"content-type": "text/html"})
+        page.text = "<html><body>nothing here</body></html>"
+        with mock.patch("requests.get", return_value=page):
+            with pytest.raises(DownloadError, match="page format may have changed"):
+                _fetch_tiktok_item("@someone", "123456")
+
+    def test_network_failure(self) -> None:
+        import requests
+
+        with mock.patch("requests.get", side_effect=requests.ConnectionError):
+            with pytest.raises(DownloadError, match="Could not reach TikTok"):
+                _fetch_tiktok_item("@someone", "123456")
+
+
+class TestDownloadTiktokPhotoPost:
+    def _fetch_mock(self, page_text: str) -> Any:
+        page = fake_response(headers={"content-type": "text/html"})
+        page.text = page_text
+        return page
+
+    def _image_response(self, body: bytes = b"fake-jpeg-bytes") -> Any:
+        return fake_response(
+            headers={"content-type": "image/jpeg", "content-length": str(len(body))},
+            chunks=[body],
+        )
+
+    def test_download_all_false_keeps_first_image_only(self, tmp_path: Path) -> None:
+        match = _tiktok_photo_match("https://www.tiktok.com/@someone/photo/123456")
+        assert match is not None
+        page = self._fetch_mock(
+            fake_tiktok_page(images=["https://cdn.test/a.jpg", "https://cdn.test/b.jpg"])
+        )
+        with (
+            mock.patch("requests.get", side_effect=[page, self._image_response()]),
+        ):
+            result = download_tiktok_photo_post(match, tmp_path, download_all=False)
+        assert result.exists()
+        assert result.suffix == ".jpg"
+        assert "01" in result.name
+
+    def test_download_all_true_zips_every_image(self, tmp_path: Path) -> None:
+        match = _tiktok_photo_match("https://www.tiktok.com/@someone/photo/123456")
+        assert match is not None
+        page = self._fetch_mock(
+            fake_tiktok_page(images=["https://cdn.test/a.jpg", "https://cdn.test/b.jpg"])
+        )
+        with mock.patch(
+            "requests.get",
+            side_effect=[page, self._image_response(b"one"), self._image_response(b"two")],
+        ):
+            result = download_tiktok_photo_post(match, tmp_path, download_all=True)
+        assert result.suffix == ".zip"
+
+    def test_audio_only_downloads_music_track(self, tmp_path: Path) -> None:
+        match = _tiktok_photo_match("https://www.tiktok.com/@someone/photo/123456")
+        assert match is not None
+        page = self._fetch_mock(fake_tiktok_page(images=["https://cdn.test/a.jpg"]))
+        audio = fake_response(
+            headers={"content-type": "audio/mp4", "content-length": "3"}, chunks=[b"aac"]
+        )
+        with mock.patch("requests.get", side_effect=[page, audio]):
+            result = download_tiktok_photo_post(match, tmp_path, audio_only=True)
+        assert result.exists()
+
+    def test_audio_only_without_music_raises(self, tmp_path: Path) -> None:
+        match = _tiktok_photo_match("https://www.tiktok.com/@someone/photo/123456")
+        assert match is not None
+        page = self._fetch_mock(fake_tiktok_page(images=["https://cdn.test/a.jpg"], music_url=None))
+        with mock.patch("requests.get", return_value=page):
+            with pytest.raises(DownloadError, match="no audio track"):
+                download_tiktok_photo_post(match, tmp_path, audio_only=True)
+
+    def _video_response(self, body: bytes = b"fake-mp4-bytes") -> Any:
+        return fake_response(
+            headers={"content-type": "video/mp4", "content-length": str(len(body))},
+            chunks=[body],
+        )
+
+    def test_live_photo_slide_downloads_its_motion_clip(self, tmp_path: Path) -> None:
+        match = _tiktok_photo_match("https://www.tiktok.com/@someone/photo/123456")
+        assert match is not None
+        live_slide = {
+            "imageURL": {"urlList": ["https://cdn.test/a.jpg"]},
+            "video": {"urlList": ["https://cdn.test/a-live.mp4"]},
+        }
+        page = self._fetch_mock(fake_tiktok_page(images=[live_slide]))
+        with mock.patch("requests.get", side_effect=[page, self._video_response()]) as get:
+            result = download_tiktok_photo_post(match, tmp_path, download_all=False)
+        assert result.exists()
+        assert get.call_args_list[1].args[0] == "https://cdn.test/a-live.mp4"
+
+    def test_live_photo_video_nested_under_play_addr(self, tmp_path: Path) -> None:
+        match = _tiktok_photo_match("https://www.tiktok.com/@someone/photo/123456")
+        assert match is not None
+        live_slide = {
+            "imageURL": {"urlList": ["https://cdn.test/a.jpg"]},
+            "video": {"playAddr": {"urlList": ["https://cdn.test/a-live.mp4"]}},
+        }
+        page = self._fetch_mock(fake_tiktok_page(images=[live_slide]))
+        with mock.patch("requests.get", side_effect=[page, self._video_response()]) as get:
+            download_tiktok_photo_post(match, tmp_path, download_all=False)
+        assert get.call_args_list[1].args[0] == "https://cdn.test/a-live.mp4"
+
+    def test_mixed_live_and_plain_slides_keep_their_own_source(self, tmp_path: Path) -> None:
+        match = _tiktok_photo_match("https://www.tiktok.com/@someone/photo/123456")
+        assert match is not None
+        live_slide = {
+            "imageURL": {"urlList": ["https://cdn.test/a.jpg"]},
+            "video": {"urlList": ["https://cdn.test/a-live.mp4"]},
+        }
+        plain_slide = "https://cdn.test/b.jpg"
+        page = self._fetch_mock(fake_tiktok_page(images=[live_slide, plain_slide]))
+        with mock.patch(
+            "requests.get",
+            side_effect=[page, self._video_response(), self._image_response()],
+        ) as get:
+            result = download_tiktok_photo_post(match, tmp_path, download_all=True)
+        assert result.suffix == ".zip"
+        assert get.call_args_list[1].args[0] == "https://cdn.test/a-live.mp4"
+        assert get.call_args_list[2].args[0] == "https://cdn.test/b.jpg"
+
+
+class TestTiktokLivePhotoUrl:
+    def test_no_video_field_is_a_plain_slide(self) -> None:
+        assert _tiktok_live_photo_url({"imageURL": {"urlList": ["https://cdn.test/a.jpg"]}}) is None
+
+    def test_flat_url_list_on_video(self) -> None:
+        img = {"video": {"urlList": ["https://cdn.test/a-live.mp4"]}}
+        assert _tiktok_live_photo_url(img) == "https://cdn.test/a-live.mp4"
+
+    def test_url_list_nested_under_play_addr(self) -> None:
+        img = {"video": {"playAddr": {"urlList": ["https://cdn.test/a-live.mp4"]}}}
+        assert _tiktok_live_photo_url(img) == "https://cdn.test/a-live.mp4"
+
+    def test_url_list_nested_under_download_addr(self) -> None:
+        img = {"video": {"downloadAddr": {"urlList": ["https://cdn.test/a-live.mp4"]}}}
+        assert _tiktok_live_photo_url(img) == "https://cdn.test/a-live.mp4"
+
+    def test_video_field_present_but_empty_falls_back(self) -> None:
+        assert _tiktok_live_photo_url({"video": {}}) is None
+
+    def test_video_field_wrong_type_falls_back(self) -> None:
+        assert _tiktok_live_photo_url({"video": "not-a-dict"}) is None
+
+
+class TestInspectPostTiktokPhoto:
+    def test_reports_image_count(self) -> None:
+        page = fake_response(headers={"content-type": "text/html"})
+        page.text = fake_tiktok_page(
+            images=["https://cdn.test/a.jpg", "https://cdn.test/b.jpg", "https://cdn.test/c.jpg"]
+        )
+        with mock.patch("requests.get", return_value=page):
+            assert inspect_post("https://www.tiktok.com/@someone/photo/123456") == 3
+
+    def test_falls_back_to_one_on_fetch_failure(self) -> None:
+        import requests
+
+        with mock.patch("requests.get", side_effect=requests.ConnectionError):
+            assert inspect_post("https://www.tiktok.com/@someone/photo/123456") == 1
 
 
 class TestFilenameFromResponse:
@@ -237,6 +481,29 @@ class TestFindFfmpeg:
         monkeypatch.setattr(dl.shutil, "which", lambda _: None)
         monkeypatch.setattr(dl, "FFMPEG_FALLBACK_DIRS", (str(tmp_path / "empty"),))
         assert dl.find_ffmpeg() is None
+
+
+class TestFindFfprobe:
+    def test_falls_back_to_known_dirs_when_not_on_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import media_downloader.downloader as dl
+
+        fake_ffprobe = tmp_path / "ffprobe"
+        fake_ffprobe.write_text("#!/bin/sh\n")
+        fake_ffprobe.chmod(0o755)
+        monkeypatch.setattr(dl.shutil, "which", lambda _: None)
+        monkeypatch.setattr(dl, "FFMPEG_FALLBACK_DIRS", (str(tmp_path),))
+        assert dl.find_ffprobe() == str(fake_ffprobe)
+
+    def test_returns_none_when_nowhere_to_be_found(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import media_downloader.downloader as dl
+
+        monkeypatch.setattr(dl.shutil, "which", lambda _: None)
+        monkeypatch.setattr(dl, "FFMPEG_FALLBACK_DIRS", (str(tmp_path / "empty"),))
+        assert dl.find_ffprobe() is None
 
 
 class TestDownloadDispatch:
@@ -591,6 +858,171 @@ class TestStripMetadata:
         assert clip.read_bytes() == b"original bytes"
 
 
+class TestProbeCodecs:
+    def test_reads_video_and_audio_codec(self, tmp_path: Path) -> None:
+        import json
+
+        from media_downloader.downloader import _probe_codecs
+
+        clip = tmp_path / "clip.mp4"
+        payload = json.dumps(
+            {
+                "streams": [
+                    {"codec_type": "video", "codec_name": "hevc"},
+                    {"codec_type": "audio", "codec_name": "aac"},
+                ]
+            }
+        )
+        with mock.patch("subprocess.run", return_value=mock.Mock(returncode=0, stdout=payload)):
+            video_codec, audio_codec = _probe_codecs(clip, "/usr/bin/ffprobe")
+        assert video_codec == "hevc"
+        assert audio_codec == "aac"
+
+    def test_picks_first_stream_of_each_type(self, tmp_path: Path) -> None:
+        import json
+
+        from media_downloader.downloader import _probe_codecs
+
+        clip = tmp_path / "clip.mkv"
+        payload = json.dumps(
+            {
+                "streams": [
+                    {"codec_type": "video", "codec_name": "av1"},
+                    {"codec_type": "video", "codec_name": "mjpeg"},  # e.g. embedded cover art
+                    {"codec_type": "audio", "codec_name": "opus"},
+                ]
+            }
+        )
+        with mock.patch("subprocess.run", return_value=mock.Mock(returncode=0, stdout=payload)):
+            video_codec, audio_codec = _probe_codecs(clip, "/usr/bin/ffprobe")
+        assert video_codec == "av1"
+        assert audio_codec == "opus"
+
+    def test_no_video_stream_returns_none_for_video(self, tmp_path: Path) -> None:
+        import json
+
+        from media_downloader.downloader import _probe_codecs
+
+        clip = tmp_path / "song.m4a"
+        payload = json.dumps({"streams": [{"codec_type": "audio", "codec_name": "aac"}]})
+        with mock.patch("subprocess.run", return_value=mock.Mock(returncode=0, stdout=payload)):
+            video_codec, audio_codec = _probe_codecs(clip, "/usr/bin/ffprobe")
+        assert video_codec is None
+        assert audio_codec == "aac"
+
+    def test_ffprobe_failure_returns_unknown(self, tmp_path: Path) -> None:
+        from media_downloader.downloader import _probe_codecs
+
+        clip = tmp_path / "clip.mp4"
+        with mock.patch("subprocess.run", return_value=mock.Mock(returncode=1, stdout="")):
+            assert _probe_codecs(clip, "/usr/bin/ffprobe") == (None, None)
+
+    def test_unparseable_output_returns_unknown(self, tmp_path: Path) -> None:
+        from media_downloader.downloader import _probe_codecs
+
+        clip = tmp_path / "clip.mp4"
+        with mock.patch("subprocess.run", return_value=mock.Mock(returncode=0, stdout="not json")):
+            assert _probe_codecs(clip, "/usr/bin/ffprobe") == (None, None)
+
+
+class TestNormalizeVideoCodec:
+    def test_noop_for_non_video_extension(self, tmp_path: Path) -> None:
+        from media_downloader.downloader import normalize_video_codec
+
+        img = tmp_path / "photo.jpg"
+        img.write_bytes(b"jpeg bytes")
+        with mock.patch("media_downloader.downloader._probe_codecs") as probe:
+            result = normalize_video_codec(img, "/usr/bin/ffmpeg", "/usr/bin/ffprobe")
+        probe.assert_not_called()
+        assert result == img
+        assert img.read_bytes() == b"jpeg bytes"
+
+    def test_noop_when_already_h264(self, tmp_path: Path) -> None:
+        from media_downloader.downloader import normalize_video_codec
+
+        clip = tmp_path / "clip.mp4"
+        clip.write_bytes(b"h264 bytes")
+        with (
+            mock.patch("media_downloader.downloader._probe_codecs", return_value=("h264", "aac")),
+            mock.patch("subprocess.run") as run,
+        ):
+            result = normalize_video_codec(clip, "/usr/bin/ffmpeg", "/usr/bin/ffprobe")
+        run.assert_not_called()
+        assert result == clip
+        assert clip.read_bytes() == b"h264 bytes"
+
+    def test_noop_when_no_video_stream_detected(self, tmp_path: Path) -> None:
+        from media_downloader.downloader import normalize_video_codec
+
+        clip = tmp_path / "clip.mp4"
+        clip.write_bytes(b"mystery bytes")
+        with (
+            mock.patch("media_downloader.downloader._probe_codecs", return_value=(None, None)),
+            mock.patch("subprocess.run") as run,
+        ):
+            result = normalize_video_codec(clip, "/usr/bin/ffmpeg", "/usr/bin/ffprobe")
+        run.assert_not_called()
+        assert result == clip
+
+    def test_transcodes_hevc_and_stream_copies_aac_audio(self, tmp_path: Path) -> None:
+        from media_downloader.downloader import normalize_video_codec
+
+        clip = tmp_path / "clip.mp4"
+        clip.write_bytes(b"hevc bytes")
+
+        def fake_run(cmd: list[str], **kwargs: object) -> mock.Mock:
+            Path(cmd[-1]).write_bytes(b"h264 bytes")
+            return mock.Mock(returncode=0, stderr="")
+
+        with (
+            mock.patch("media_downloader.downloader._probe_codecs", return_value=("hevc", "aac")),
+            mock.patch("subprocess.run", side_effect=fake_run) as run,
+        ):
+            result = normalize_video_codec(clip, "/usr/bin/ffmpeg", "/usr/bin/ffprobe")
+
+        assert result == clip  # same path, same name — not a renamed/re-extensioned file
+        assert clip.read_bytes() == b"h264 bytes"
+        args = run.call_args[0][0]
+        assert args[0] == "/usr/bin/ffmpeg"
+        assert "-c:v" in args and "libx264" in args
+        assert "-crf" in args
+        assert args[args.index("-c:a") + 1] == "copy"  # already AAC — no audio re-encode
+
+    def test_transcodes_non_aac_audio_too(self, tmp_path: Path) -> None:
+        from media_downloader.downloader import normalize_video_codec
+
+        clip = tmp_path / "clip.webm"
+        clip.write_bytes(b"av1+opus bytes")
+
+        def fake_run(cmd: list[str], **kwargs: object) -> mock.Mock:
+            Path(cmd[-1]).write_bytes(b"h264+aac bytes")
+            return mock.Mock(returncode=0, stderr="")
+
+        with (
+            mock.patch("media_downloader.downloader._probe_codecs", return_value=("av1", "opus")),
+            mock.patch("subprocess.run", side_effect=fake_run) as run,
+        ):
+            normalize_video_codec(clip, "/usr/bin/ffmpeg", "/usr/bin/ffprobe")
+
+        args = run.call_args[0][0]
+        assert args[args.index("-c:a") + 1] == "aac"
+
+    def test_raises_on_ffmpeg_failure_and_leaves_original_untouched(self, tmp_path: Path) -> None:
+        from media_downloader.downloader import normalize_video_codec
+
+        clip = tmp_path / "clip.mp4"
+        clip.write_bytes(b"original hevc bytes")
+        with (
+            mock.patch("media_downloader.downloader._probe_codecs", return_value=("hevc", "aac")),
+            mock.patch(
+                "subprocess.run", return_value=mock.Mock(returncode=1, stderr="ffmpeg exploded")
+            ),
+        ):
+            with pytest.raises(DownloadError, match="Normalizing video"):
+                normalize_video_codec(clip, "/usr/bin/ffmpeg", "/usr/bin/ffprobe")
+        assert clip.read_bytes() == b"original hevc bytes"
+
+
 class TestDownloadStripMetadataIntegration:
     def test_strip_metadata_runs_before_encrypt(self, tmp_path: Path) -> None:
         import media_downloader.downloader as dl
@@ -631,3 +1063,122 @@ class TestDownloadStripMetadataIntegration:
                     tmp_path,
                     options=dl.DownloadOptions(strip_metadata=True),
                 )
+
+
+class TestDownloadViaYtdlpCodecNormalization:
+    def _fake_ydl(self, downloaded: dict[str, Any]) -> mock.MagicMock:
+        fake_ydl = mock.MagicMock()
+        fake_ydl.__enter__.return_value.extract_info.return_value = {"id": "abc", "title": "clip"}
+        fake_ydl.__enter__.return_value.process_ie_result.return_value = downloaded
+        return fake_ydl
+
+    def test_normalizes_result_when_ffmpeg_and_ffprobe_available(self, tmp_path: Path) -> None:
+        import media_downloader.downloader as dl
+
+        clip = tmp_path / "clip.mp4"
+        clip.write_bytes(b"hevc bytes")
+        downloaded = {
+            "id": "abc",
+            "title": "clip",
+            "requested_downloads": [{"filepath": str(clip)}],
+        }
+        with (
+            mock.patch("yt_dlp.YoutubeDL", return_value=self._fake_ydl(downloaded)),
+            mock.patch.object(dl, "find_ffmpeg", return_value="/usr/bin/ffmpeg"),
+            mock.patch.object(dl, "find_ffprobe", return_value="/usr/bin/ffprobe"),
+            mock.patch.object(dl, "normalize_video_codec") as normalize,
+        ):
+            normalize.return_value = clip
+            result = dl.download_via_ytdlp("https://x.test/v", tmp_path)
+
+        normalize.assert_called_once_with(clip, "/usr/bin/ffmpeg", "/usr/bin/ffprobe")
+        assert result == clip
+
+    def test_skips_normalization_for_audio_only(self, tmp_path: Path) -> None:
+        import media_downloader.downloader as dl
+
+        song = tmp_path / "song.m4a"
+        song.write_bytes(b"aac bytes")
+        downloaded = {
+            "id": "abc",
+            "title": "song",
+            "requested_downloads": [{"filepath": str(song)}],
+        }
+        with (
+            mock.patch("yt_dlp.YoutubeDL", return_value=self._fake_ydl(downloaded)),
+            mock.patch.object(dl, "find_ffmpeg", return_value="/usr/bin/ffmpeg"),
+            mock.patch.object(dl, "find_ffprobe", return_value="/usr/bin/ffprobe"),
+            mock.patch.object(dl, "normalize_video_codec") as normalize,
+        ):
+            dl.download_via_ytdlp("https://x.test/v", tmp_path, audio_only=True)
+
+        normalize.assert_not_called()
+
+    def test_skips_normalization_when_ffmpeg_missing(self, tmp_path: Path) -> None:
+        import media_downloader.downloader as dl
+
+        clip = tmp_path / "clip.mp4"
+        clip.write_bytes(b"hevc bytes")
+        downloaded = {
+            "id": "abc",
+            "title": "clip",
+            "requested_downloads": [{"filepath": str(clip)}],
+        }
+        with (
+            mock.patch("yt_dlp.YoutubeDL", return_value=self._fake_ydl(downloaded)),
+            mock.patch.object(dl, "find_ffmpeg", return_value=None),
+            mock.patch.object(dl, "normalize_video_codec") as normalize,
+        ):
+            dl.download_via_ytdlp("https://x.test/v", tmp_path)
+
+        normalize.assert_not_called()
+
+    def test_skips_normalization_when_ffprobe_missing(self, tmp_path: Path) -> None:
+        import media_downloader.downloader as dl
+
+        clip = tmp_path / "clip.mp4"
+        clip.write_bytes(b"hevc bytes")
+        downloaded = {
+            "id": "abc",
+            "title": "clip",
+            "requested_downloads": [{"filepath": str(clip)}],
+        }
+        with (
+            mock.patch("yt_dlp.YoutubeDL", return_value=self._fake_ydl(downloaded)),
+            mock.patch.object(dl, "find_ffmpeg", return_value="/usr/bin/ffmpeg"),
+            mock.patch.object(dl, "find_ffprobe", return_value=None),
+            mock.patch.object(dl, "normalize_video_codec") as normalize,
+        ):
+            dl.download_via_ytdlp("https://x.test/v", tmp_path)
+
+        normalize.assert_not_called()
+
+    def test_normalizes_every_item_of_a_multi_item_post_before_zipping(
+        self, tmp_path: Path
+    ) -> None:
+        import media_downloader.downloader as dl
+
+        clip1 = tmp_path / "1.mp4"
+        clip2 = tmp_path / "2.mp4"
+        clip1.write_bytes(b"one")
+        clip2.write_bytes(b"two")
+        downloaded = {
+            "id": "abc",
+            "title": "post",
+            "entries": [
+                {"requested_downloads": [{"filepath": str(clip1)}]},
+                {"requested_downloads": [{"filepath": str(clip2)}]},
+            ],
+        }
+        with (
+            mock.patch("yt_dlp.YoutubeDL", return_value=self._fake_ydl(downloaded)),
+            mock.patch.object(dl, "find_ffmpeg", return_value="/usr/bin/ffmpeg"),
+            mock.patch.object(dl, "find_ffprobe", return_value="/usr/bin/ffprobe"),
+            mock.patch.object(
+                dl, "normalize_video_codec", side_effect=lambda p, *_: p
+            ) as normalize,
+        ):
+            result = dl.download_via_ytdlp("https://x.test/post", tmp_path, download_all=True)
+
+        assert normalize.call_count == 2
+        assert result.suffix == ".zip"

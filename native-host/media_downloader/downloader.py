@@ -149,6 +149,144 @@ def url_extension(url: str) -> str | None:
     return name.rsplit(".", 1)[-1].lower()
 
 
+TIKTOK_SHORT_LINK_RE = re.compile(r"https?://(?:vm|vt)\.tiktok\.com/\w+")
+TIKTOK_PHOTO_URL_RE = re.compile(
+    r"https?://(?:www\.)?tiktok\.com/(?P<user>@[\w.-]+)/photo/(?P<id>\d+)"
+)
+TIKTOK_UNIVERSAL_DATA_RE = re.compile(
+    r'<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>(.*?)</script>', re.S
+)
+
+
+def _resolve_tiktok_short_link(url: str, timeout: float = 10.0) -> str:
+    """vm.tiktok.com/vt.tiktok.com short links redirect to the real
+    tiktok.com URL, which is what TIKTOK_PHOTO_URL_RE needs to match
+    against. Falls back to the original URL if resolution fails."""
+    if not TIKTOK_SHORT_LINK_RE.match(url):
+        return url
+    try:
+        response = requests.head(url, allow_redirects=True, timeout=timeout)
+        return response.url
+    except requests.RequestException:
+        return url
+
+
+def _tiktok_photo_match(url: str) -> re.Match[str] | None:
+    return TIKTOK_PHOTO_URL_RE.match(_resolve_tiktok_short_link(url))
+
+
+def _fetch_tiktok_item(user: str, item_id: str, timeout: float = 15.0) -> dict[str, object]:
+    """TikTok's /photo/ URL alias gates its post data behind a CAPTCHA for
+    any non-interactive request, but the exact same post (TikTok shares one
+    ID space between photo and video posts) is also reachable at its
+    /video/ URL alias, which renders full data server-side through a plain,
+    unauthenticated GET — no session, no challenge. Only the /photo/ path
+    has this quirk; every other yt-dlp-supported URL is untouched by it."""
+    url = f"https://www.tiktok.com/{user}/video/{item_id}"
+    try:
+        response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=timeout)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        raise DownloadError(f"Could not reach TikTok: {exc}") from exc
+
+    import json
+
+    match = TIKTOK_UNIVERSAL_DATA_RE.search(response.text)
+    if match is None:
+        raise DownloadError("Could not read TikTok's post data (page format may have changed).")
+    try:
+        scope = json.loads(match.group(1))["__DEFAULT_SCOPE__"]
+        item = scope["webapp.video-detail"]["itemInfo"]["itemStruct"]
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise DownloadError(
+            "Could not read TikTok's post data (page format may have changed)."
+        ) from exc
+    if not isinstance(item, dict) or "imagePost" not in item:
+        raise DownloadError("This TikTok post isn't a photo post.")
+    return item
+
+
+def _tiktok_live_photo_url(img: dict[str, object]) -> str | None:
+    """A "Photo Mode" slide posted from a Live Photo carries a short muted
+    video loop alongside its still frame. TikTok doesn't publish this
+    field's name, so this checks the shapes ordinary TikTok video URLs use
+    elsewhere in this same payload — a flat urlList (like imageURL itself),
+    or one nested under playAddr/downloadAddr (like item.video) — and
+    returns None if neither is present, so a still image downloads exactly
+    as before. Unverified against a real Live Photo post; if a slide that's
+    known to be one still downloads as a flat image, this shape is wrong
+    and needs adjusting against an actual sample."""
+    video = img.get("video")
+    if not isinstance(video, dict):
+        return None
+    for container in (video, video.get("playAddr"), video.get("downloadAddr")):
+        if not isinstance(container, dict):
+            continue
+        url_list = container.get("urlList")
+        if isinstance(url_list, list) and url_list and isinstance(url_list[0], str):
+            return url_list[0]
+    return None
+
+
+def download_tiktok_photo_post(
+    match: re.Match[str],
+    dest_dir: Path,
+    progress: ProgressCallback | None = None,
+    download_all: bool = False,
+    audio_only: bool = False,
+    image_format: str | None = None,
+) -> Path:
+    """Downloads every image (or, with audio_only, just the background
+    track) from a TikTok "Photo Mode" post. download_all=False (the
+    default, matching every other multi-item post in this app) keeps only
+    the first image. A slide posted from a Live Photo downloads its motion
+    clip instead of a flat still, when TikTok's response exposes one (see
+    _tiktok_live_photo_url)."""
+    item = _fetch_tiktok_item(match.group("user"), match.group("id"))
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    title = _safe_title({"title": item.get("desc"), "id": item.get("id")})
+
+    if audio_only:
+        music = item.get("music")
+        music_url = music.get("playUrl") if isinstance(music, dict) else None
+        if not isinstance(music_url, str) or not music_url:
+            raise DownloadError("This TikTok photo post has no audio track.")
+        return download_direct(music_url, dest_dir, progress)
+
+    image_post = item.get("imagePost")
+    images = image_post.get("images") if isinstance(image_post, dict) else None
+    urls: list[str] = []
+    for img in images or []:
+        if not isinstance(img, dict):
+            continue
+        live_photo_url = _tiktok_live_photo_url(img)
+        if live_photo_url is not None:
+            urls.append(live_photo_url)
+            continue
+        image_url_field = img.get("imageURL")
+        url_list = image_url_field.get("urlList") if isinstance(image_url_field, dict) else None
+        if isinstance(url_list, list) and url_list and isinstance(url_list[0], str):
+            urls.append(url_list[0])
+    if not urls:
+        raise DownloadError("Could not find any images in this TikTok post.")
+    if not download_all:
+        urls = urls[:1]
+
+    paths: list[Path] = []
+    total = len(urls)
+    for i, image_url in enumerate(urls, 1):
+        path = download_direct(image_url, dest_dir, image_format=image_format)
+        numbered = unique_path(dest_dir, f"{title} - {i:02d}{path.suffix}")
+        path.rename(numbered)
+        paths.append(numbered)
+        if progress:
+            progress(Progress(percent=100.0 * i / total))
+
+    if len(paths) == 1:
+        return paths[0]
+    return zip_files(paths, dest_dir, f"{title} ({len(paths)} items)")
+
+
 def classify_url(url: str, head_check: bool = True, timeout: float = 10.0) -> str:
     """Return "direct" for URLs we can stream as-is, "page" for everything else."""
     parsed = urlparse(url)
@@ -256,6 +394,105 @@ def strip_metadata(path: Path, ffmpeg_path: str) -> Path:
     return path
 
 
+VIDEO_CONTAINER_EXTENSIONS = frozenset({"mp4", "webm", "mov", "mkv", "avi", "m4v"})
+# ffprobe reports H.264 as "h264"; avc1 is the codec's fourcc tag rather than
+# something ffprobe puts in codec_name, but it costs nothing to tolerate both.
+H264_CODEC_NAMES = frozenset({"h264", "avc1"})
+AAC_CODEC_NAMES = frozenset({"aac"})
+
+
+def _probe_codecs(path: Path, ffprobe_path: str) -> tuple[str | None, str | None]:
+    """Returns (video_codec, audio_codec) — the codec_name of the first
+    stream of each kind ffprobe reports. Either comes back None if that
+    stream is missing, or if ffprobe fails or its output can't be read; a
+    probe failure is never raised, since normalize_video_codec treats
+    "unknown" the same as "already fine" and leaves the file alone."""
+    import json
+    import subprocess
+
+    result = subprocess.run(
+        [
+            ffprobe_path,
+            "-v",
+            "error",
+            "-show_entries",
+            "stream=codec_name,codec_type",
+            "-of",
+            "json",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    streams: list[object] = []
+    if result.returncode == 0:
+        try:
+            parsed = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict) and isinstance(parsed.get("streams"), list):
+            streams = parsed["streams"]
+
+    video_codec: str | None = None
+    audio_codec: str | None = None
+    for stream in streams:
+        if not isinstance(stream, dict):
+            continue
+        codec_name = stream.get("codec_name")
+        if not isinstance(codec_name, str):
+            continue
+        if stream.get("codec_type") == "video" and video_codec is None:
+            video_codec = codec_name
+        elif stream.get("codec_type") == "audio" and audio_codec is None:
+            audio_codec = codec_name
+    return video_codec, audio_codec
+
+
+def normalize_video_codec(path: Path, ffmpeg_path: str, ffprobe_path: str) -> Path:
+    """Re-encodes to H.264 a video file that came back from yt-dlp in
+    something a lot of "plays .mp4" players/devices can't decode (AV1,
+    HEVC, VP9, ...). ytdlp_format_selector already prefers avc1, but its
+    fallback tiers don't check codec at all, so a site that simply has no
+    avc1 rendition for some content (observed on TikTok) still lands here
+    anyway. Re-encodes in place, same container the file already has; audio
+    is stream-copied when it's already AAC, re-encoded to AAC otherwise (a
+    merge can hand back Opus or other audio the container can't always hold
+    as-is). No-op, returned unchanged, when the extension isn't a known
+    video container, ffprobe can't find a video stream, or that stream is
+    already h264/avc1."""
+    if path.suffix.lstrip(".").lower() not in VIDEO_CONTAINER_EXTENSIONS:
+        return path
+
+    video_codec, audio_codec = _probe_codecs(path, ffprobe_path)
+    if video_codec is None or video_codec in H264_CODEC_NAMES:
+        return path
+
+    import subprocess
+
+    audio_codec_args = ["-c:a", "copy" if audio_codec in AAC_CODEC_NAMES else "aac"]
+    tmp_target = path.with_name(f".{path.name}.normalized{path.suffix}")
+    result = subprocess.run(
+        [
+            ffmpeg_path,
+            "-y",
+            "-i",
+            str(path),
+            "-c:v",
+            "libx264",
+            "-crf",
+            "18",
+            *audio_codec_args,
+            str(tmp_target),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0 or not tmp_target.is_file():
+        raise DownloadError(f"Normalizing video to H.264 failed: {result.stderr.strip()}")
+    tmp_target.replace(path)
+    return path
+
+
 def download_direct(
     url: str,
     dest_dir: Path,
@@ -303,8 +540,8 @@ def download_direct(
 
 
 # Browsers spawn native messaging hosts with a minimal GUI environment whose
-# PATH lacks Homebrew/MacPorts locations, so a plain shutil.which("ffmpeg")
-# misses an ffmpeg the user demonstrably has. Check the usual suspects too.
+# PATH lacks Homebrew/MacPorts locations, so a plain shutil.which() misses an
+# ffmpeg/ffprobe the user demonstrably has. Check the usual suspects too.
 FFMPEG_FALLBACK_DIRS = (
     "/opt/homebrew/bin",  # Homebrew on Apple silicon
     "/usr/local/bin",  # Homebrew on Intel macs, common on Linux
@@ -312,15 +549,23 @@ FFMPEG_FALLBACK_DIRS = (
 )
 
 
-def find_ffmpeg() -> str | None:
-    found = shutil.which("ffmpeg")
+def _find_ffmpeg_tool(name: str) -> str | None:
+    found = shutil.which(name)
     if found:
         return found
     for directory in FFMPEG_FALLBACK_DIRS:
-        candidate = Path(directory) / "ffmpeg"
+        candidate = Path(directory) / name
         if candidate.is_file() and os.access(candidate, os.X_OK):
             return str(candidate)
     return None
+
+
+def find_ffmpeg() -> str | None:
+    return _find_ffmpeg_tool("ffmpeg")
+
+
+def find_ffprobe() -> str | None:
+    return _find_ffmpeg_tool("ffprobe")
 
 
 def ytdlp_format_selector(
@@ -467,6 +712,15 @@ def inspect_post(url: str) -> int:
     multi-item post — several images/videos attached to one tweet, gallery,
     etc. Returns the item count (1 for a single item, or for anything that
     isn't a yt-dlp-recognized URL at all)."""
+    tiktok_match = _tiktok_photo_match(url)
+    if tiktok_match is not None:
+        try:
+            item = _fetch_tiktok_item(tiktok_match.group("user"), tiktok_match.group("id"))
+        except DownloadError:
+            return 1
+        image_post = item.get("imagePost")
+        images = image_post.get("images") if isinstance(image_post, dict) else None
+        return max(1, len(images)) if isinstance(images, list) else 1
     try:
         import yt_dlp
     except ImportError:
@@ -498,7 +752,9 @@ def download_via_ytdlp(
     audio_format: str = "m4a",
     download_all: bool = False,
 ) -> Path:
-    """Download a page's media via yt-dlp. Refuses DRM-protected content."""
+    """Download a page's media via yt-dlp. Refuses DRM-protected content, and
+    re-encodes any non-H.264 video result to H.264 when ffmpeg/ffprobe are
+    both available (see normalize_video_codec)."""
     try:
         import yt_dlp
     except ImportError as exc:
@@ -564,6 +820,12 @@ def download_via_ytdlp(
         paths = [final_path[-1]]
     if not paths:
         raise DownloadError("yt-dlp finished but reported no output file.")
+
+    if not audio_only and ffmpeg_path is not None:
+        ffprobe_path = find_ffprobe()
+        if ffprobe_path is not None:
+            paths = [normalize_video_codec(p, ffmpeg_path, ffprobe_path) for p in paths]
+
     if len(paths) == 1:
         return paths[0]
 
@@ -607,8 +869,18 @@ def download(
     """
     opts = options or DownloadOptions()
     opts.validate()
+    tiktok_match = _tiktok_photo_match(url)
 
-    if opts.audio_only:
+    if tiktok_match is not None:
+        path = download_tiktok_photo_post(
+            tiktok_match,
+            dest_dir,
+            progress,
+            download_all=opts.download_all,
+            audio_only=opts.audio_only,
+            image_format=opts.image_format,
+        )
+    elif opts.audio_only:
         path = download_via_ytdlp(
             url,
             dest_dir,
