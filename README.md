@@ -1,5 +1,7 @@
 # Media Downloader
 
+[![CI](https://github.com/marcfs31/media-downloader/actions/workflows/ci.yml/badge.svg)](https://github.com/marcfs31/media-downloader/actions/workflows/ci.yml)
+
 Two cooperating pieces for saving media you can already access in your browser:
 
 - **`extension/`** — a browser extension (Chrome/Edge Manifest V3 and Firefox)
@@ -146,6 +148,12 @@ server.
 
 ## Repo infrastructure
 
-This project was bootstrapped from the Claude Code starter template
-(`~/Claude/Template`) — see [CLAUDE.md](CLAUDE.md) for the correctness gate,
-hooks, and conventions that came with it.
+This project was bootstrapped from the Claude Code starter template — see
+[CLAUDE.md](CLAUDE.md) for the correctness gate, hooks, and conventions that
+came with it.
+
+## License
+
+All rights reserved — see [LICENSE](LICENSE). The source is public here for
+transparency, but it isn't licensed for reuse, modification, or
+redistribution without permission.

@@ -5,8 +5,7 @@ rather than opening a public issue.
 
 - Preferred: use GitHub's [private vulnerability reporting](https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing/privately-reporting-a-security-vulnerability)
   (repo → Security tab → "Report a vulnerability").
-- Otherwise: email the maintainer(s) directly — add an address here once this
-  template is adapted for a real project.
+- Otherwise: email developer@marc.fors.com directly.
 
 Please include: the affected version/commit, a description of the issue, and steps
 to reproduce if possible. We'll acknowledge reports and follow up with a timeline
