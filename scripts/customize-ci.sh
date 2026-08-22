@@ -44,7 +44,7 @@ case "$STACK" in
     add "- run: pnpm --dir extension install --frozen-lockfile"
     add "- uses: actions/setup-python@v5"
     add "  with: { python-version: '3.12' }"
-    add "- run: python3 -m venv native-host/.venv && cd native-host && .venv/bin/pip install -e . --group dev"
+    add "- run: python3 -m venv native-host/.venv && native-host/.venv/bin/pip install --upgrade pip && cd native-host && .venv/bin/pip install -e . --group dev"
     ;;
   node)
     case "$PM" in

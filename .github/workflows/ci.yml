@@ -23,7 +23,7 @@ jobs:
       - run: pnpm --dir extension install --frozen-lockfile
       - uses: actions/setup-python@v5
         with: { python-version: '3.12' }
-      - run: python3 -m venv native-host/.venv && cd native-host && .venv/bin/pip install -e . --group dev
+      - run: python3 -m venv native-host/.venv && native-host/.venv/bin/pip install --upgrade pip && cd native-host && .venv/bin/pip install -e . --group dev
       # END CUSTOMIZE-CI
 
       - name: Run the same correctness gate used locally
