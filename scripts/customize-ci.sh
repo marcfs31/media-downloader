@@ -38,6 +38,7 @@ add() { steps="$steps      $1"$'\n'; }
 case "$STACK" in
   monorepo)
     add "- uses: pnpm/action-setup@v4"
+    add "  with: { package_json_file: extension/package.json }"
     add "- uses: actions/setup-node@v4"
     add "  with: { node-version: 22, cache: pnpm, cache-dependency-path: extension/pnpm-lock.yaml }"
     add "- run: pnpm --dir extension install --frozen-lockfile"

@@ -3,6 +3,7 @@
   "version": "0.2.0",
   "private": true,
   "license": "UNLICENSED",
+  "packageManager": "pnpm@10.34.3",
   "description": "Browser extension that surfaces a download control on media found on the current page, and can download an arbitrary link's media via a native-host/yt-dlp backend.",
   "repository": {
     "type": "git",
