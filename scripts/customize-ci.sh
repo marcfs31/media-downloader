@@ -37,25 +37,25 @@ add() { steps="$steps      $1"$'\n'; }
 
 case "$STACK" in
   monorepo)
-    add "- uses: pnpm/action-setup@v4"
+    add "- uses: pnpm/action-setup@v6"
     add "  with: { package_json_file: extension/package.json }"
-    add "- uses: actions/setup-node@v4"
+    add "- uses: actions/setup-node@v7"
     add "  with: { node-version: 22, cache: pnpm, cache-dependency-path: extension/pnpm-lock.yaml }"
     add "- run: pnpm --dir extension install --frozen-lockfile"
-    add "- uses: actions/setup-python@v5"
+    add "- uses: actions/setup-python@v7"
     add "  with: { python-version: '3.12' }"
     add "- run: python3 -m venv native-host/.venv && native-host/.venv/bin/pip install --upgrade pip && cd native-host && .venv/bin/pip install -e . --group dev"
     ;;
   node)
     case "$PM" in
       pnpm)
-        add "- uses: pnpm/action-setup@v4"
-        add "- uses: actions/setup-node@v4"
+        add "- uses: pnpm/action-setup@v6"
+        add "- uses: actions/setup-node@v7"
         add "  with: { node-version: 20, cache: pnpm }"
         add "- run: pnpm install --frozen-lockfile"
         ;;
       yarn)
-        add "- uses: actions/setup-node@v4"
+        add "- uses: actions/setup-node@v7"
         add "  with: { node-version: 20, cache: yarn }"
         add "- run: yarn install --frozen-lockfile"
         ;;
@@ -64,7 +64,7 @@ case "$STACK" in
         add "- run: bun install --frozen-lockfile"
         ;;
       *)
-        add "- uses: actions/setup-node@v4"
+        add "- uses: actions/setup-node@v7"
         add "  with: { node-version: 20, cache: npm }"
         add "- run: npm ci"
         ;;
@@ -77,13 +77,13 @@ case "$STACK" in
         add "- run: uv sync --all-extras"
         ;;
       poetry)
-        add "- uses: actions/setup-python@v5"
+        add "- uses: actions/setup-python@v7"
         add "  with: { python-version: '3.12' }"
         add "- uses: snok/install-poetry@v1"
         add "- run: poetry install"
         ;;
       *)
-        add "- uses: actions/setup-python@v5"
+        add "- uses: actions/setup-python@v7"
         add "  with: { python-version: '3.12' }"
         add "- run: pip install -r requirements.txt"
         ;;

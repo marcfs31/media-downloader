@@ -9,19 +9,19 @@ jobs:
   correctness-gate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Runtime setup below is auto-managed by scripts/customize-ci.sh, based on
       # whatever .claude/stack-cache.json says after scripts/detect-stack.sh runs.
       # Safe to hand-edit — a future run only replaces what's between the two
       # marker lines, so a hand edit outside those markers always sticks.
       # BEGIN CUSTOMIZE-CI
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with: { package_json_file: extension/package.json }
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with: { node-version: 22, cache: pnpm, cache-dependency-path: extension/pnpm-lock.yaml }
       - run: pnpm --dir extension install --frozen-lockfile
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with: { python-version: '3.12' }
       - run: python3 -m venv native-host/.venv && native-host/.venv/bin/pip install --upgrade pip && cd native-host && .venv/bin/pip install -e . --group dev
       # END CUSTOMIZE-CI
