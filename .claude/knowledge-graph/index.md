@@ -19,5 +19,6 @@ them with; don't leave them as stale placeholders describing a different codebas
 - [vulnerability-check-gates-license-check-doesnt](decisions/vulnerability-check-gates-license-check-doesnt.md) — why one optional dependency-scan step fails the gate and the other doesn't
 - [layered-secret-scanning](decisions/layered-secret-scanning.md) — why gitleaks runs in three separate places instead of one
 - [conventional-commits-adopted](decisions/conventional-commits-adopted.md) — commitlint enforces the type-prefix convention, with subject-case relaxed to match existing history
+- [playlist-batch-downloads](modules/playlist-batch-downloads.md) — how `media-downloader-playlist` splits parsing from running, and the two dedupe/resume footguns it hit
 - [correctness-gate-script](modules/correctness-gate-script.md) — what `run-checks.sh` does and why it must never diverge from CI
 - [stack-cache-staleness](footguns/stack-cache-staleness.md) — `.claude/stack-cache.json` doesn't auto-refresh; re-run `detect-stack.sh` after a stack change

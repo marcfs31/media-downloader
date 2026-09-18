@@ -2,7 +2,9 @@
 
 Two entry points share downloader.py:
 - host.py    — the browser-facing native messaging host (stdio protocol),
-- cli.py     — `media-downloader <url>` for use without a browser.
+- cli.py     — `media-downloader <url>` for use without a browser, plus
+               `media-downloader-playlist <file>` for a whole playlist file
+               (parsed by playlist.py).
 """
 
 __version__ = "0.1.0"

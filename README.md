@@ -96,6 +96,62 @@ zipped into one file. The CLI remembers your answer after asking once
 companion server's job list and phone-page UI) for verifying the file arrived
 intact.
 
+## Playlists
+
+`media-downloader-playlist` runs the same engine over a whole list of tracks
+in one go. Playlist files are plain text — the ones in [`playlists/`](playlists/)
+are the working examples:
+
+```
+# Playlist: Arce
+# 38 tracks (some titles repeat)
+
+1. Toke de Queda — Arce
+   https://www.youtube.com/watch?v=vm9XBp8G1Rw
+
+22. La Vida Que No Es Nuestra — Arce
+    No official YouTube videoclip found.
+    Spotify: https://open.spotify.com/track/7a4YfV8nO0wZlFwOOP1XZE
+
+35. Ermitaño — Astola, Ratón
+    https://www.youtube.com/results?search_query=Astola+Raton+Ermitano+oficial
+```
+
+A numbered line opens a track (`N. Title — Artists`); indented lines under it
+belong to it. Three kinds of track come out, all three of which the example
+files contain:
+
+| In the file | What happens |
+|---|---|
+| A `watch`/`youtu.be`/`shorts` link | Downloaded directly |
+| A `/results?search_query=…` link | yt-dlp takes the **top search hit** — the matched title is printed so you can spot a wrong guess |
+| No YouTube link (prose, a Spotify link) | Reported as unavailable, never downloaded |
+
+```bash
+cd native-host
+.venv/bin/media-downloader-playlist --dry-run ../playlists/*.md      # plan only
+.venv/bin/media-downloader-playlist -d ~/Music/Playlists ../playlists/*.md
+.venv/bin/media-downloader-playlist -a --audio-format mp3 -d ~/Music ../playlists/to-sing.md
+```
+
+Each playlist lands in its own folder under `--dest` (named from the
+`# Playlist:` header), and takes the same `-a/--audio-only`, `-q/--quality`,
+`--video-format` and `--audio-format` flags as the single-URL CLI.
+
+- **Repeats are downloaded once.** Playlists exported from streaming services
+  often list the same track twice; the second one is skipped.
+- **Re-running resumes.** Tracks whose file is already in the destination
+  folder are skipped, so an interrupted run picks up where it stopped. Delete
+  a file to force a re-download.
+- **One bad track doesn't stop the run.** A region-locked video or a search
+  with no hits is recorded and the run continues. Everything needing
+  attention is listed again at the end, and the exit code is non-zero if any
+  track failed. `--report out.json` writes the per-track outcome to JSON.
+
+For best results install **ffmpeg** first (`brew install ffmpeg` on macOS) —
+without it yt-dlp can only take single-file formats, which caps quality on
+YouTube, and `--audio-format` conversion is unavailable.
+
 ## Phones (iOS / Android)
 
 Mobile browsers can't run the desktop setup — iOS Safari extensions get no
