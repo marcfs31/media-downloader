@@ -14,6 +14,7 @@ media-downloader-host = "media_downloader.host:main"
 media-downloader = "media_downloader.cli:main"
 media-downloader-decrypt = "media_downloader.cli:decrypt_main"
 media-downloader-serve = "media_downloader.server:main"
+media-downloader-playlist = "media_downloader.cli:playlist_main"
 
 [dependency-groups]
 dev = [

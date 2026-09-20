@@ -742,6 +742,58 @@ def inspect_post(url: str) -> int:
     return 1
 
 
+@dataclass(frozen=True)
+class SearchResult:
+    video_id: str
+    url: str
+    title: str
+
+
+def resolve_search(query: str) -> SearchResult | None:
+    """Resolve a YouTube search query to its top hit, without downloading.
+
+    The playlist files stand a search-results URL in for tracks whose video
+    link wasn't pinned down ("the official video, whichever one that is"), and
+    a /results page isn't itself downloadable. Returns None when the search
+    comes back empty. The caller is expected to surface the matched title —
+    a top hit is a guess, not an identification.
+    """
+    try:
+        import yt_dlp
+    except ImportError as exc:
+        raise DownloadError(
+            "yt-dlp is not installed. Install the native host with its dependencies "
+            "(see native-host/README section of the repo README)."
+        ) from exc
+
+    try:
+        # extract_flat: the search only needs the winner's id/title, and
+        # resolving full format info for it here would be thrown away —
+        # download_via_ytdlp re-extracts from the watch URL anyway.
+        with yt_dlp.YoutubeDL(
+            {"quiet": True, "no_warnings": True, "noprogress": True, "extract_flat": True}
+        ) as ydl:
+            info = ydl.extract_info(f"ytsearch1:{query}", download=False)
+    except Exception as exc:  # yt-dlp raises its own exception zoo
+        raise DownloadError(f"yt-dlp search failed: {exc}") from exc
+
+    entries = info.get("entries") if isinstance(info, dict) else None
+    if not isinstance(entries, list) or not entries:
+        return None
+    first = entries[0]
+    if not isinstance(first, dict):
+        return None
+    video_id = first.get("id")
+    if not isinstance(video_id, str) or not video_id:
+        return None
+    title = first.get("title")
+    return SearchResult(
+        video_id=video_id,
+        url=f"https://www.youtube.com/watch?v={video_id}",
+        title=str(title) if title else video_id,
+    )
+
+
 def download_via_ytdlp(
     url: str,
     dest_dir: Path,

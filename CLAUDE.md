@@ -13,7 +13,10 @@ fix a stale line here than to re-explain the same thing every session.
   ESLint + Prettier, `tsc --noEmit`. Pure detection logic lives in
   `src/media-detect.ts` so it stays testable without extension APIs.
 - **`native-host/`** — Python native-messaging host + CLI wrapping yt-dlp and
-  requests. Tooling lives in `native-host/.venv` (one-time setup:
+  requests. Pure playlist-file parsing lives in `media_downloader/playlist.py`
+  (no network, no yt-dlp) so it stays testable; the batch runner that drives it
+  is `playlist_main` in `cli.py`, and `playlists/` holds the real input files.
+  Tooling lives in `native-host/.venv` (one-time setup:
   `python3 -m venv .venv && .venv/bin/pip install -e . --group dev` from
   `native-host/`), ruff (lint + format), mypy `--strict`, pytest.
 
